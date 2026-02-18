@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+.env.*.local
+backend/bedrock_credentials.env
+
+# Logs
+*.log
+npm-debug.log*
+
+# Claude Code
+.claude/
+
+# Misc
+nul
+# Python
+__pycache__/
+*.pyc
+backend/bedrock_credentials.py
+
+# Database
+db/morning_blotter.db
