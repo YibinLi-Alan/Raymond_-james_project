@@ -234,114 +234,84 @@ export function InsightsPanel({ trades, tradeCount: _tradeCount, totalNotional }
     return `${sign}${pct.toFixed(0)}%`;
   };
 
-  const renderItem = (item: RankedItem, idx: number, key: string) => (
-    <div key={key} className="column-item">
-      <span className="item-rank">{idx + 1}.</span>
-      <span className="item-name">{item.name}</span>
-      <span className={`item-arrow ${item.isUp ? 'up' : 'down'}`}>
-        {item.isUp ? '▲' : '▼'}
-      </span>
-      <span className={`item-pct ${item.isUp ? 'up' : 'down'}`}>{formatPctDiff(item.pctDiff)}</span>
-      <span className="item-value">{formatCurrency(item.value)}</span>
-    </div>
-  );
+  const sections = [
+    { title: 'Top Counterparties', items: insights.topCounterparties, key: 'cp' },
+    { title: 'Top Traders', items: insights.topTraders, key: 'tr' },
+    { title: 'Top Trades', items: insights.topTrades, key: 'td', isTrades: true },
+    { title: 'Top Products', items: insights.topProducts, key: 'pr' },
+    { title: 'Top Asset Classes', items: insights.topAssetClasses, key: 'ac' },
+    { title: 'Top Tenors', items: insights.topTenors, key: 'tn' },
+  ];
 
   return (
     <div className="insights-panel">
-      {/* Top Metrics Row */}
-      <div className="insights-metrics-row">
-        <div className="insights-metric">
-          <span className="metric-value">{formatCurrency(insights.todaysVolume)}</span>
-          <span className="metric-label">Notional</span>
+      {/* Summary metrics */}
+      <div className="insights-summary">
+        <div className="insights-summary-metrics">
+          <div className="insights-summary-item">
+            <span className="insights-summary-value">{formatCurrency(insights.todaysVolume)}</span>
+            <span className="insights-summary-label">Notional</span>
+          </div>
+          <div className="insights-summary-item">
+            <span className="insights-summary-value">{insights.todaysTradeCount}</span>
+            <span className="insights-summary-label">Executions</span>
+          </div>
+          <div className="insights-summary-item">
+            <span className="insights-summary-value">{insights.percentile}th</span>
+            <span className="insights-summary-label">Pctl</span>
+          </div>
         </div>
-        <div className="insights-metric">
-          <span className="metric-value">{insights.todaysTradeCount.toLocaleString()}</span>
-          <span className="metric-label">Executions</span>
-        </div>
-        <div className="insights-metric">
-          <span className="metric-value">{insights.percentile}th</span>
-          <span className="metric-label">Percentile</span>
-        </div>
-        <div className="insights-metric flow-metric">
-          <div className="metric-flow-bar">
+        <div className="insights-flow">
+          <div className="insights-flow-bar">
             <div
-              className="flow-buy"
+              className="insights-flow-buy"
               style={{ width: `${insights.buyPct}%` }}
-            >
-              <span className="flow-label-inside">Buy {insights.buyPct.toFixed(0)}%</span>
-            </div>
+            />
             <div
-              className="flow-sell"
+              className="insights-flow-sell"
               style={{ width: `${100 - insights.buyPct}%` }}
-            >
-              <span className="flow-label-inside">Sell {(100 - insights.buyPct).toFixed(0)}%</span>
+            />
+          </div>
+          <div className="insights-flow-labels">
+            <span className="insights-flow-buy-label">Buy {insights.buyPct.toFixed(0)}%</span>
+            <span className="insights-flow-sell-label">Sell {(100 - insights.buyPct).toFixed(0)}%</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Scrollable sections - single column for narrow panel */}
+      <div className="insights-sections">
+        {sections.map(({ title, items, key, isTrades }) => (
+          <div key={key} className="insights-section-card">
+            <div className="insights-section-title">{title}</div>
+            <div className="insights-section-list">
+              {items.map((item, idx) =>
+                isTrades ? (
+                  <div key={(item as RankedItem & { tradeId?: string }).tradeId} className="insights-row">
+                    <span className="insights-rank">{idx + 1}</span>
+                    <span className="insights-name">{(item as RankedItem & { tradeId?: string }).name}</span>
+                    <span className={`insights-pct ${(item as RankedItem).isUp ? 'up' : 'down'}`}>
+                      {formatPctDiff((item as RankedItem).pctDiff)}
+                    </span>
+                    <span className="insights-value">{formatCurrency((item as RankedItem).value)}</span>
+                  </div>
+                ) : (
+                  <div key={(item as RankedItem).name} className="insights-row">
+                    <span className="insights-rank">{idx + 1}</span>
+                    <span className="insights-name">{(item as RankedItem).name}</span>
+                    <span className={`insights-pct ${(item as RankedItem).isUp ? 'up' : 'down'}`}>
+                      {formatPctDiff((item as RankedItem).pctDiff)}
+                    </span>
+                    <span className="insights-value">{formatCurrency((item as RankedItem).value)}</span>
+                  </div>
+                )
+              )}
             </div>
           </div>
-          <span className="metric-label">Flow</span>
-        </div>
+        ))}
       </div>
 
-      {/* Six Panel Grid - 2 rows x 3 columns */}
-      <div className="insights-grid">
-        {/* Row 1 */}
-        <div className="insights-column">
-          <div className="column-title">Top Counterparties</div>
-          <div className="column-list">
-            {insights.topCounterparties.map((item, idx) => renderItem(item, idx, item.name))}
-          </div>
-        </div>
-
-        <div className="insights-column">
-          <div className="column-title">Top Traders</div>
-          <div className="column-list">
-            {insights.topTraders.map((item, idx) => renderItem(item, idx, item.name))}
-          </div>
-        </div>
-
-        <div className="insights-column">
-          <div className="column-title">Top Trades</div>
-          <div className="column-list">
-            {insights.topTrades.map((item, idx) => (
-              <div key={item.tradeId} className="column-item">
-                <span className="item-rank">{idx + 1}.</span>
-                <span className="item-name">{item.name}</span>
-                <span className={`item-arrow ${item.isUp ? 'up' : 'down'}`}>
-                  {item.isUp ? '▲' : '▼'}
-                </span>
-                <span className={`item-pct ${item.isUp ? 'up' : 'down'}`}>{formatPctDiff(item.pctDiff)}</span>
-                <span className="item-value">{formatCurrency(item.value)}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Row 2 */}
-        <div className="insights-column">
-          <div className="column-title">Top Products</div>
-          <div className="column-list">
-            {insights.topProducts.map((item, idx) => renderItem(item, idx, item.name))}
-          </div>
-        </div>
-
-        <div className="insights-column">
-          <div className="column-title">Top Asset Classes</div>
-          <div className="column-list">
-            {insights.topAssetClasses.map((item, idx) => renderItem(item, idx, item.name))}
-          </div>
-        </div>
-
-        <div className="insights-column">
-          <div className="column-title">Top Tenors</div>
-          <div className="column-list">
-            {insights.topTenors.map((item, idx) => renderItem(item, idx, item.name))}
-          </div>
-        </div>
-      </div>
-
-      {/* Footnote */}
-      <div className="insights-footnote">
-        * % change vs. average daily volume
-      </div>
+      <div className="insights-footnote">* vs. avg daily volume</div>
     </div>
   );
 }

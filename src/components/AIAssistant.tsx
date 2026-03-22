@@ -28,11 +28,16 @@ export function AIAssistant() {
 
   const {
     setAIQueryResult,
+    setLastAiQueryResult,
     setAILoading,
     setAIChartOption,
     clearAIResult,
     getGridFilterContext,
+    visiblePanelIds,
+    openPanel,
+    setActiveChartPanel,
     isAILoading,
+    lastAiQueryResult,
   } = useBlotterStore();
 
   const scrollToBottom = useCallback(() => {
@@ -55,28 +60,57 @@ export function AIAssistant() {
     addMessage({ role: 'user', content: text });
 
     setAILoading(true);
-    // Only clear previous AI result when sending a new Data Query, so new result can replace.
-    // General Chat must not clear — keeps existing query result and panel linkage.
-    if (mode === 'data') {
+    const t = text.trim().toLowerCase();
+    const isGraphFollowUp =
+      mode === 'data' &&
+      !!lastAiQueryResult?.data?.length &&
+      (t === 'yes' ||
+        t === 'yeah' ||
+        t === 'yep' ||
+        t === 'please' ||
+        t === 'sure' ||
+        t === 'ok' ||
+        t === 'okay' ||
+        /\b(graph|chart|plot|visualize|visualization)\b/.test(t) ||
+        /create.*graph|show.*graph|draw.*chart|graph it|plot it/i.test(t));
+    if (mode === 'data' && !isGraphFollowUp) {
       clearAIResult();
     }
 
     try {
       if (mode === 'data') {
         const context = getGridFilterContext();
-        const res: AIQueryResponse = await aiQuery(text, context as Record<string, unknown>);
+        const preferTradeBlotter = visiblePanelIds.includes('grid');
+        const queryContext: Record<string, unknown> = {
+          ...context,
+          preferTradeBlotter,
+        };
+        if (lastAiQueryResult?.data?.length) {
+          queryContext.previousQueryResult = {
+            data: lastAiQueryResult.data,
+            sql: lastAiQueryResult.sql,
+          };
+        }
+        queryContext.conversationHistory = messages
+          .slice(-6)
+          .map((m) => ({ role: m.role, content: m.content }));
+        const res: AIQueryResponse = await aiQuery(text, queryContext);
 
         if (res.error) {
+          const isUserFacing =
+            res.error.includes("I'm sorry") || res.error.includes("I cannot");
           addMessage({
             role: 'assistant',
-            content: `Query failed: ${res.error}`,
+            content: isUserFacing ? res.error : `Query failed: ${res.error}`,
             error: res.error,
           });
         } else {
           const dataPreview = res.data?.length
             ? `Returned ${res.data.length} row(s).`
             : 'No rows returned.';
-          let content = dataPreview;
+          let content = res.aiSummary
+            ? `${res.aiSummary}\n\n${dataPreview}`
+            : dataPreview;
           if (res.sql) content += `\n\n\`\`\`sql\n${res.sql}\n\`\`\``;
 
           addMessage({
@@ -86,15 +120,22 @@ export function AIAssistant() {
             data: res.data,
           });
 
-          setAIQueryResult({
+          const result = {
             data: res.data ?? [],
             trades: res.trades,
             sql: res.sql,
             chartOption: res.chartOption ?? null,
+            aiSummary: res.aiSummary ?? null,
+            anomalyTradeIds: res.anomalyTradeIds ?? [],
             error: res.error ?? null,
-          });
+          };
+          setAIQueryResult(result);
+          setLastAiQueryResult({ data: result.data, sql: result.sql });
+          openPanel('aiDataTable');
           if (res.chartOption) {
             setAIChartOption(res.chartOption);
+            openPanel('aiGraphPanel');
+            setActiveChartPanel('aiGraphPanel');
           } else {
             setAIChartOption(null);
           }
@@ -104,8 +145,35 @@ export function AIAssistant() {
           .filter((m) => m.role === 'user' || m.role === 'assistant')
           .slice(-10)
           .map((m) => ({ role: m.role, content: m.content }));
-        const { answer } = await aiChat(text, history);
+        const contextSnapshot =
+          lastAiQueryResult?.data?.length
+            ? { data: lastAiQueryResult.data, sql: lastAiQueryResult.sql }
+            : null;
+        const { answer, chartOption, data: chatData, sql: chatSql } = await aiChat(
+          text,
+          history,
+          contextSnapshot
+        );
         addMessage({ role: 'assistant', content: answer });
+        if (chatData) {
+          const result = {
+            data: chatData,
+            trades: undefined,
+            sql: chatSql ?? undefined,
+            chartOption: chartOption ?? null,
+            aiSummary: null,
+            anomalyTradeIds: [],
+            error: null,
+          };
+          setAIQueryResult(result);
+          setLastAiQueryResult({ data: chatData, sql: chatSql });
+          openPanel('aiDataTable');
+        }
+        if (chartOption) {
+          setAIChartOption(chartOption);
+          openPanel('aiGraphPanel');
+          setActiveChartPanel('aiGraphPanel');
+        }
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -125,8 +193,13 @@ export function AIAssistant() {
     setAILoading,
     clearAIResult,
     setAIQueryResult,
+    setLastAiQueryResult,
     setAIChartOption,
+    openPanel,
+    setActiveChartPanel,
     getGridFilterContext,
+    visiblePanelIds,
+    lastAiQueryResult,
   ]);
 
   const handleKeyDown = useCallback(
@@ -197,6 +270,11 @@ export function AIAssistant() {
         <div ref={messagesEndRef} />
       </div>
 
+      {mode === 'chat' && lastAiQueryResult?.data?.length ? (
+        <div className="ai-context-indicator">
+          Context: Analyzing last query results
+        </div>
+      ) : null}
       <div className="ai-assistant-input-row">
         <textarea
           ref={inputRef}

@@ -233,12 +233,18 @@ export function TradeGrid({ trades, quickFilterText, selectedTradeId, onRowDoubl
     }
   }, [setSelectedTradeId, onRowDoubleClick]);
 
-  // Row class rules for highlighting selected row
-  const rowClassRules = useMemo(() => ({
-    'selected-trade-row': (params: RowClassParams<Trade>) => {
-      return params.data?.internalTradeId === selectedTradeId;
-    },
-  }), [selectedTradeId]);
+  const anomalyTradeIds = useBlotterStore((s) => s.aiQueryResult?.anomalyTradeIds ?? []);
+
+  // Row class rules: selected row, anomaly highlight (red)
+  const rowClassRules = useMemo(
+    () => ({
+      'selected-trade-row': (params: RowClassParams<Trade>) =>
+        params.data?.internalTradeId === selectedTradeId,
+      'anomaly-trade-row': (params: RowClassParams<Trade>) =>
+        !!params.data?.internalTradeId && anomalyTradeIds.includes(params.data.internalTradeId),
+    }),
+    [selectedTradeId, anomalyTradeIds]
+  );
 
   // Default visible columns: Trade Id, Side, Cusip, Ticker, Notional, Price, Yield, Counterparty
   const columnDefs = useMemo<ColDef<Trade>[]>(() => [

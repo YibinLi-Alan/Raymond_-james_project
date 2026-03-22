@@ -1,26 +1,52 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { DockviewLayoutHandle } from './DockviewLayout';
+import { useBlotterStore } from '../store/useBlotterStore';
 
 interface PanelsDropdownProps {
   layoutHandle: DockviewLayoutHandle | null;
 }
 
+/** Panels that are actually visible on screen (not hidden by chart overlay). */
+function getDisplayedPanelIds(
+  visiblePanelIds: string[],
+  activeChartPanel: string | null
+): Set<string> {
+  const displayed = new Set<string>();
+  displayed.add('aiAssistant'); // Always visible in left slot
+
+  const hasChartOverlay = activeChartPanel && visiblePanelIds.includes(activeChartPanel);
+  if (hasChartOverlay) {
+    displayed.add(activeChartPanel);
+    return displayed;
+  }
+
+  // Base layout: middle (grid/aiDataTable) + right (insights)
+  for (const id of visiblePanelIds) {
+    displayed.add(id);
+  }
+  return displayed;
+}
+
 export function PanelsDropdown({ layoutHandle }: PanelsDropdownProps) {
   const [showMenu, setShowMenu] = useState(false);
-  const [panelStates, setPanelStates] = useState<{ id: string; title: string; isOpen: boolean }[]>([]);
+  const visiblePanelIds = useBlotterStore((s) => s.visiblePanelIds);
+  const activeChartPanel = useBlotterStore((s) => s.activeChartPanel);
   const menuRef = useRef<HTMLDivElement>(null);
 
-  // Sync panel states from layout whenever menu is open or layoutHandle changes (single source of truth)
-  useEffect(() => {
-    if (!layoutHandle) return;
-    const definitions = layoutHandle.getPanelDefinitions();
-    const states = definitions.map((def) => ({
-      id: def.id,
-      title: def.title,
-      isOpen: layoutHandle.isPanelOpen(def.id),
-    }));
-    setPanelStates(states);
-  }, [showMenu, layoutHandle]);
+  const displayedPanelIds = useMemo(
+    () => getDisplayedPanelIds(visiblePanelIds, activeChartPanel),
+    [visiblePanelIds, activeChartPanel]
+  );
+
+  // Panel states: checkmark only when panel is actually visible (not hidden by overlay)
+  const panelStates = layoutHandle
+    ? layoutHandle.getPanelDefinitions().map((def) => ({
+        id: def.id,
+        title: def.title,
+        isOpen: displayedPanelIds.has(def.id),
+        isInLayout: visiblePanelIds.includes(def.id), // in visiblePanelIds (open slot, may be hidden)
+      }))
+    : [];
 
   // Close menu when clicking outside
   useEffect(() => {
@@ -45,14 +71,14 @@ export function PanelsDropdown({ layoutHandle }: PanelsDropdownProps) {
   }, [layoutHandle]);
 
   const handleTogglePanel = useCallback(
-    (panelId: string, isOpen: boolean) => {
+    (panelId: string, isOpen: boolean, isInLayout: boolean) => {
       if (isOpen) {
         handleClosePanel(panelId);
       } else {
-        if (layoutHandle && !layoutHandle.canOpenMore()) {
-          return; // will show hint below
+        // Only block if we'd add a new panel and we're at max
+        if (isInLayout || !layoutHandle || layoutHandle.canOpenMore()) {
+          handleRestorePanel(panelId);
         }
-        handleRestorePanel(panelId);
       }
     },
     [handleClosePanel, handleRestorePanel, layoutHandle]
@@ -87,18 +113,21 @@ export function PanelsDropdown({ layoutHandle }: PanelsDropdownProps) {
           {layoutHandle && !layoutHandle.canOpenMore() && (
             <div className="restore-panel-max-hint">Max 4 panels. Close one to open another.</div>
           )}
-          {panelStates.map((panel) => (
+          {panelStates.map((panel) => {
+            const wouldAddPanel = !panel.isInLayout;
+            const cannotAdd = wouldAddPanel && layoutHandle && !layoutHandle.canOpenMore();
+            return (
             <button
               key={panel.id}
-              className={`restore-panel-item ${panel.isOpen ? 'active' : ''} ${!panel.isOpen && layoutHandle && !layoutHandle.canOpenMore() ? 'disabled' : ''}`}
-              onClick={() => handleTogglePanel(panel.id, panel.isOpen)}
-              disabled={!panel.isOpen && layoutHandle !== null && !layoutHandle.canOpenMore()}
-              title={!panel.isOpen && layoutHandle && !layoutHandle.canOpenMore() ? 'Close one panel first' : undefined}
+              className={`restore-panel-item ${panel.isOpen ? 'active' : ''} ${cannotAdd ? 'disabled' : ''}`}
+              onClick={() => handleTogglePanel(panel.id, panel.isOpen, panel.isInLayout)}
+              disabled={cannotAdd}
+              title={cannotAdd ? 'Close one panel first' : undefined}
             >
               <span className="panel-toggle-icon">{panel.isOpen ? '✓' : ''}</span>
               {panel.title}
             </button>
-          ))}
+          );})}
           <div className="restore-panel-divider" />
           <button className="restore-panel-item reset" onClick={handleResetLayout}>
             Reset Layout

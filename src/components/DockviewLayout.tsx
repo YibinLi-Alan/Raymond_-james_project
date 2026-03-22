@@ -9,8 +9,8 @@ import { IntradayPriceChart } from './IntradayPriceChart';
 import { YieldCurveScatterPanel } from './YieldCurveScatterPanel';
 import { AIAssistant } from './AIAssistant';
 import { AIDataTablePanel } from './AIDataTablePanel';
+import { AIGraphPanel } from './AIGraphPanel';
 
-const MAX_PANELS = 4;
 const ALL_PANEL_IDS = [
   'insights',
   'sunburstChart',
@@ -20,13 +20,9 @@ const ALL_PANEL_IDS = [
   'yieldCurve',
   'aiAssistant',
   'aiDataTable',
+  'aiGraphPanel',
 ] as const;
 type PanelId = (typeof ALL_PANEL_IDS)[number];
-
-interface ChartSelection {
-  date: string;
-  product: string;
-}
 
 interface PanelDefinition {
   id: string;
@@ -53,36 +49,28 @@ const PANEL_DEFINITIONS: PanelDefinition[] = [
   { id: 'yieldCurve', title: 'Yield Curve', component: 'yieldCurve' },
   { id: 'aiAssistant', title: 'AI Assistant', component: 'aiAssistant' },
   { id: 'aiDataTable', title: 'AI Data Table', component: 'aiDataTable' },
+  { id: 'aiGraphPanel', title: 'AI Graph', component: 'aiGraphPanel' },
 ];
 
 interface DockviewLayoutProps {
   trades: Trade[];
   filteredTrades: Trade[];
-  /** When AI returns data, all panels use this; otherwise same as filteredTrades */
   displayTrades: Trade[];
-  /** True when displayTrades is from AI query result (so grid/sunburst/insights follow AI result) */
   isAIResult?: boolean;
   quickFilterText: string;
   tradeCount: number;
   totalNotional: number;
-  hoverContext: ChartSelection | null;
-  selectedPoint: ChartSelection | null;
+  hoverContext: { date: string; product: string } | null;
+  selectedPoint: { date: string; product: string } | null;
   bclassFilter: BClassFilter | null;
   intradayData: IntradayData | null;
   selectedTradeId: string | null;
-  onChartHover: (data: ChartSelection | null) => void;
-  onChartClick: (data: ChartSelection) => void;
+  onChartHover: (data: { date: string; product: string } | null) => void;
+  onChartClick: (data: { date: string; product: string }) => void;
   onBclassClick: (filter: BClassFilter) => void;
   onTradeDoubleClick: (trade: Trade) => void;
   onApiReady?: (handle: DockviewLayoutHandle) => void;
 }
-
-const DEFAULT_SLOTS: (PanelId | null)[] = [
-  'insights',
-  'sunburstChart',
-  'grid',
-  'intradayChart',
-];
 
 export function DockviewLayout({
   trades: _trades,
@@ -103,11 +91,14 @@ export function DockviewLayout({
   onTradeDoubleClick,
   onApiReady,
 }: DockviewLayoutProps) {
-  const [slots, setSlots] = useState<(PanelId | null)[]>(() => DEFAULT_SLOTS);
   const apiRef = useRef<DockviewLayoutHandle | null>(null);
   const aiChartOption = useBlotterStore((s) => s.aiChartOption);
+  const visiblePanelIds = useBlotterStore((s) => s.visiblePanelIds);
+  const activeChartPanel = useBlotterStore((s) => s.activeChartPanel);
+  const openPanel = useBlotterStore((s) => s.openPanel);
+  const closePanel = useBlotterStore((s) => s.closePanel);
+  const resetLayout = useBlotterStore((s) => s.resetLayout);
 
-  // All panels use displayTrades (AI result when set, otherwise filtered) so charts and grid stay in sync
   const getPanelParams = useCallback(
     (panelId: string) => {
       switch (panelId) {
@@ -147,43 +138,31 @@ export function DockviewLayout({
     ]
   );
 
-  const openCount = slots.filter(Boolean).length;
-
-  const handleRestorePanel = useCallback((panelId: string) => {
-    setSlots((prev) => {
-      if (prev.some((s) => s === panelId)) return prev;
-      if (prev.every(Boolean)) return prev; // max 4, cannot add
-      const next = [...prev];
-      const idx = next.findIndex((s) => s === null);
-      if (idx >= 0) next[idx] = panelId as PanelId;
-      return next;
-    });
-  }, []);
-
-  const handleClosePanel = useCallback((panelId: string) => {
-    setSlots((prev) => {
-      const idx = prev.indexOf(panelId as PanelId);
-      if (idx < 0) return prev;
-      const next = [...prev];
-      next[idx] = null;
-      return next;
-    });
-  }, []);
-
-  const handleResetLayout = useCallback(() => {
-    setSlots([...DEFAULT_SLOTS]);
-  }, []);
+  const handleRestorePanel = useCallback(
+    (panelId: string) => openPanel(panelId),
+    [openPanel]
+  );
+  const handleClosePanel = useCallback(
+    (panelId: string) => closePanel(panelId),
+    [closePanel]
+  );
+  const handleResetLayout = useCallback(() => resetLayout(), [resetLayout]);
 
   const isPanelOpen = useCallback(
-    (panelId: string) => slots.some((s) => s === panelId),
-    [slots]
+    (panelId: string) => visiblePanelIds.includes(panelId),
+    [visiblePanelIds]
   );
 
   const getClosedPanels = useCallback(() => {
-    return PANEL_DEFINITIONS.filter((def) => !slots.some((s) => s === def.id)).map((d) => d.id);
-  }, [slots]);
+    return PANEL_DEFINITIONS.filter((def) => !visiblePanelIds.includes(def.id)).map(
+      (d) => d.id
+    );
+  }, [visiblePanelIds]);
 
-  const canOpenMore = useCallback(() => openCount < MAX_PANELS, [openCount]);
+  const canOpenMore = useCallback(
+    () => visiblePanelIds.length < 4,
+    [visiblePanelIds]
+  );
 
   apiRef.current = {
     getPanelDefinitions: () => PANEL_DEFINITIONS,
@@ -197,9 +176,18 @@ export function DockviewLayout({
 
   useEffect(() => {
     onApiReady?.(apiRef.current!);
-  }, [onApiReady, slots, handleRestorePanel, handleClosePanel, handleResetLayout, getClosedPanels, isPanelOpen, canOpenMore]);
+  }, [
+    onApiReady,
+    visiblePanelIds,
+    handleRestorePanel,
+    handleClosePanel,
+    handleResetLayout,
+    getClosedPanels,
+    isPanelOpen,
+    canOpenMore,
+  ]);
 
-  const renderSlotContent = (panelId: PanelId) => {
+  const renderPanelContent = (panelId: PanelId) => {
     const params = getPanelParams(panelId) as Record<string, unknown>;
     switch (panelId) {
       case 'insights':
@@ -249,28 +237,121 @@ export function DockviewLayout({
         return <AIAssistant />;
       case 'aiDataTable':
         return <AIDataTablePanel />;
+      case 'aiGraphPanel':
+        return <AIGraphPanel />;
       default:
         return null;
     }
   };
 
+  const showAiDataTable = visiblePanelIds.includes('aiDataTable');
+  const showInsights = visiblePanelIds.includes('insights');
+  const showGrid = visiblePanelIds.includes('grid');
+  const hasChartOverlay = activeChartPanel && visiblePanelIds.includes(activeChartPanel);
+  const showMiddleContent = showAiDataTable || showGrid;
+
+  // Resizable left slot width (25% default, user can drag sash)
+  const [leftWidthPercent, setLeftWidthPercent] = useState(25);
+  const sashRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const sash = sashRef.current;
+    if (!sash) return;
+    let startX = 0;
+    let startWidth = 0;
+    const onMouseDown = (e: MouseEvent) => {
+      startX = e.clientX;
+      startWidth = leftWidthPercent;
+      document.addEventListener('mousemove', onMouseMove);
+      document.addEventListener('mouseup', onMouseUp);
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+    };
+    const onMouseMove = (e: MouseEvent) => {
+      const dx = e.clientX - startX;
+      const container = sash.closest('.dockview-wrapper');
+      if (!container) return;
+      const totalW = container.getBoundingClientRect().width;
+      const deltaPercent = (dx / totalW) * 100;
+      let next = startWidth + deltaPercent;
+      next = Math.max(15, Math.min(45, next));
+      setLeftWidthPercent(next);
+    };
+    const onMouseUp = () => {
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    sash.addEventListener('mousedown', onMouseDown);
+    return () => {
+      sash.removeEventListener('mousedown', onMouseDown);
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+    };
+  }, [leftWidthPercent]);
+
   return (
-    <div className="dockview-wrapper slot-layout">
-      <div className="slot-grid-container">
-        {slots.map((panelId, index) => (
-          <div key={index} className="slot-cell">
-            {panelId ? (
-              <div className="dockview-panel-content slot-panel">
-                {renderSlotContent(panelId)}
+    <div className="dockview-wrapper dashboard-4col-layout">
+      {/* Left slot (1/4 default): AI Assistant - fixed, full height, resizable via sash */}
+      <div
+        className="dashboard-left-slot"
+        style={{ width: `${leftWidthPercent}%` }}
+      >
+        <div className="dockview-panel-content slot-panel">
+          <AIAssistant />
+        </div>
+      </div>
+      {/* Resize sash between left and right area */}
+      <div className="dashboard-sash" ref={sashRef} title="Drag to resize" />
+      {/* Right area (3/4): Data Table, Daily Insight, or Chart overlay */}
+      <div className="dashboard-right-area">
+        {hasChartOverlay ? (
+          /* Chart overlay: replaces middle + right slots */
+          <div className="dashboard-chart-overlay">
+            <div className="dockview-panel-content slot-panel">
+              {renderPanelContent(activeChartPanel as PanelId)}
+            </div>
+          </div>
+        ) : (
+          /* Base layout: AI Data Table (2/4) or Trade Blotter (covers Data Table) + Daily Insight (1/4) with reflow */
+          <>
+            {showMiddleContent && (
+              <div
+                className="dashboard-middle-slot"
+                style={{ flex: showInsights ? 2 : 1 }}
+              >
+                <div className="dockview-panel-content slot-panel">
+                  {showGrid ? (
+                    renderPanelContent('grid')
+                  ) : showAiDataTable ? (
+                    <AIDataTablePanel />
+                  ) : null}
+                </div>
               </div>
-            ) : (
-              <div className="slot-empty">
+            )}
+            {showInsights && (
+              <div
+                className="dashboard-right-slot"
+                style={{ flex: showMiddleContent ? 1 : 1 }}
+              >
+                <div className="dockview-panel-content slot-panel">
+                  <InsightsPanel
+                    trades={displayTrades}
+                    tradeCount={tradeCount}
+                    totalNotional={totalNotional}
+                  />
+                </div>
+              </div>
+            )}
+            {!showMiddleContent && !showInsights && (
+              <div className="dashboard-empty-slot">
                 <span>Empty slot</span>
                 <span className="slot-empty-hint">Open a panel from Panels menu</span>
               </div>
             )}
-          </div>
-        ))}
+          </>
+        )}
       </div>
     </div>
   );

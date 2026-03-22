@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import ReactECharts from 'echarts-for-react';
+import { enhanceChartOption } from '../utils/chartEnhancement';
 import { IntradayData } from '../types/trade';
 
 interface IntradayPriceChartProps {
@@ -45,6 +46,11 @@ export function IntradayPriceChart({
     cusip: intradayData?.cusip,
     selectedTradeId
   });
+
+  const enhancedAiOption = useMemo(
+    () => (aiChartOption && Object.keys(aiChartOption).length > 0 ? enhanceChartOption(aiChartOption) : null),
+    [aiChartOption]
+  );
 
   const option = useMemo(() => {
     if (!intradayData || intradayData.evalPrices.length === 0) {
@@ -262,6 +268,7 @@ export function IntradayPriceChart({
 
   // AI-suggested chart overlay (replaces intraday when set)
   if (aiChartOption && Object.keys(aiChartOption).length > 0) {
+    const displayOption = enhancedAiOption ?? aiChartOption;
     return (
       <div className="intraday-chart-container ai-chart-overlay">
         <div className="intraday-chart-header">
@@ -271,7 +278,7 @@ export function IntradayPriceChart({
           </div>
         </div>
         <ReactECharts
-          option={aiChartOption as import('echarts').EChartsOption}
+          option={displayOption as import('echarts').EChartsOption}
           style={{ height: 'calc(100% - 50px)', width: '100%' }}
           opts={{ renderer: 'canvas' }}
         />

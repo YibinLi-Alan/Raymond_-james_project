@@ -67,7 +67,15 @@ export interface AIQueryResult {
   trades?: Record<string, unknown>[]; // Trade-like rows for grid when query returns v_trades_full-style data
   sql?: string;
   chartOption?: Record<string, unknown> | null;
+  aiSummary?: string | null;
+  anomalyTradeIds?: string[]; // TradeIDs to highlight in red (outliers)
   error?: string | null;
+}
+
+// Snapshot of last Data Query result for General Chat context injection
+export interface LastAiQueryResult {
+  data: Record<string, unknown>[];
+  sql?: string;
 }
 
 // ECharts option type (for AI-suggested chart)
@@ -95,9 +103,14 @@ interface BlotterState {
 
   // Layout State
   layoutConfig: Record<string, unknown>;
+  /** Panel IDs that are currently visible. AI Assistant always rendered in left slot. Max 4 total. */
+  visiblePanelIds: string[];
+  /** When a chart is open, this is the active chart ID overlay in the right 3/4 area. */
+  activeChartPanel: string | null;
 
   // AI Assistant State
   aiQueryResult: AIQueryResult | null;
+  lastAiQueryResult: LastAiQueryResult | null; // Persisted for General Chat context injection
   isAILoading: boolean;
   aiChartOption: AIChartOption;
 
@@ -121,8 +134,16 @@ interface BlotterState {
   resetFilters: () => void;
   resetToDefaults: () => void;
 
+  // Layout panel actions (for 4-column dashboard)
+  setVisiblePanelIds: (ids: string[]) => void;
+  openPanel: (panelId: string) => void;
+  closePanel: (panelId: string) => void;
+  setActiveChartPanel: (panelId: string | null) => void;
+  resetLayout: () => void;
+
   // AI Assistant actions
   setAIQueryResult: (result: AIQueryResult | null) => void;
+  setLastAiQueryResult: (result: LastAiQueryResult | null) => void;
   setAILoading: (loading: boolean) => void;
   setAIChartOption: (option: AIChartOption) => void;
   clearAIResult: () => void;
@@ -142,6 +163,11 @@ const defaultDateRange: DateRange = {
 const defaultSortModel: SortModel[] = [
   { colId: 'tradeDate', sort: 'desc' },
 ];
+
+// Layout: default visible panels (AI Assistant + AI Data Table + Daily Insights)
+const DEFAULT_VISIBLE_PANELS = ['aiAssistant', 'aiDataTable', 'insights'];
+const MAX_PANELS = 4;
+const CHART_PANEL_IDS = ['aiGraphPanel', 'sunburstChart', 'treemapChart', 'intradayChart', 'yieldCurve'];
 
 // Generate unique ID
 function generateId(): string {
@@ -171,9 +197,12 @@ export const useBlotterStore = create<BlotterState>()(
 
       // Initial Layout
       layoutConfig: {},
+      visiblePanelIds: DEFAULT_VISIBLE_PANELS,
+      activeChartPanel: null,
 
       // AI Assistant
       aiQueryResult: null,
+      lastAiQueryResult: null,
       isAILoading: false,
       aiChartOption: null,
 
@@ -285,14 +314,69 @@ export const useBlotterStore = create<BlotterState>()(
           groupState: defaultGroupState,
           activeViewId: null,
           aiQueryResult: null,
+          lastAiQueryResult: null,
           aiChartOption: null,
+          visiblePanelIds: DEFAULT_VISIBLE_PANELS,
+          activeChartPanel: null,
         });
       },
 
+      setVisiblePanelIds: (ids) => set({ visiblePanelIds: ids }),
+      openPanel: (panelId) => {
+        const state = get();
+        if (state.visiblePanelIds.includes(panelId)) {
+          if (CHART_PANEL_IDS.includes(panelId)) {
+            set({ activeChartPanel: panelId });
+          } else if (state.activeChartPanel) {
+            // Switching to a non-chart panel (insights/grid/aiDataTable) - clear overlay to show it
+            set({ activeChartPanel: null });
+          }
+          return;
+        }
+        let next = state.visiblePanelIds.filter(
+          (id) =>
+            !(
+              (panelId === 'grid' && id === 'aiDataTable') ||
+              (panelId === 'aiDataTable' && id === 'grid')
+            )
+        );
+        if (next.length >= MAX_PANELS) {
+          if (CHART_PANEL_IDS.includes(panelId) && state.activeChartPanel) {
+            next = next.filter((id) => id !== state.activeChartPanel);
+          } else {
+            return;
+          }
+        }
+        next = [...next, panelId];
+        set({
+          visiblePanelIds: next,
+          activeChartPanel: CHART_PANEL_IDS.includes(panelId) ? panelId : state.activeChartPanel,
+        });
+      },
+      closePanel: (panelId) => {
+        const state = get();
+        if (!state.visiblePanelIds.includes(panelId)) return;
+        if (panelId === 'aiAssistant') return; // AI Assistant cannot be closed
+        const next = state.visiblePanelIds.filter((id) => id !== panelId);
+        let nextActive: string | null = state.activeChartPanel;
+        if (state.activeChartPanel === panelId) {
+          const remaining = next.filter((id) => CHART_PANEL_IDS.includes(id));
+          nextActive = remaining.length > 0 ? remaining[remaining.length - 1] : null;
+        }
+        set({ visiblePanelIds: next, activeChartPanel: nextActive });
+      },
+      setActiveChartPanel: (panelId) => set({ activeChartPanel: panelId }),
+      resetLayout: () =>
+        set({
+          visiblePanelIds: DEFAULT_VISIBLE_PANELS,
+          activeChartPanel: null,
+        }),
+
       setAIQueryResult: (result) => set({ aiQueryResult: result }),
+      setLastAiQueryResult: (result) => set({ lastAiQueryResult: result }),
       setAILoading: (loading) => set({ isAILoading: loading }),
       setAIChartOption: (option) => set({ aiChartOption: option }),
-      clearAIResult: () => set({ aiQueryResult: null, aiChartOption: null }),
+      clearAIResult: () => set({ aiQueryResult: null, lastAiQueryResult: null, aiChartOption: null }),
       getGridFilterContext: () => {
         const state = get();
         return {

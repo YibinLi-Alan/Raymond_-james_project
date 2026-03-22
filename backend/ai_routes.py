@@ -22,12 +22,13 @@ router = APIRouter(prefix="/api/ai", tags=["ai"])
 # ---------------------------------------------------------------------------
 class QueryRequest(BaseModel):
     question: str
-    context: Optional[dict[str, Any]] = None  # e.g. current grid filter state
+    context: Optional[dict[str, Any]] = None  # e.g. current grid filter state, previousQueryResult
 
 
 class ChatRequest(BaseModel):
     message: str
     history: Optional[list[dict[str, str]]] = None
+    context_snapshot: Optional[dict[str, Any]] = None  # { data: [...], sql?: str } from last Data Query
 
 
 # Snake to camel for trade-like rows (partial mapping)
@@ -134,6 +135,7 @@ def api_query(req: QueryRequest):
     """
     Mode 1: Text-to-SQL. Generate SQL from question, execute, return data + optional ECharts option.
     If the result set looks like trades (e.g. from v_trades_full), also return trades for the grid.
+    When previousQueryResult is provided and user asks for a graph, generate chart from that data.
     """
     if not is_llm_configured():
         raise HTTPException(status_code=503, detail="Bedrock not configured. Create backend/bedrock_credentials.env with AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION, BEDROCK_MODEL_ID.")
@@ -152,8 +154,17 @@ def api_query(req: QueryRequest):
 
 @router.post("/chat")
 def api_chat(req: ChatRequest):
-    """Mode 2: RAG chat — answer fixed income questions from schema and history."""
+    """Mode 2: RAG chat — answer fixed income questions from schema and history.
+    If context_snapshot is provided (from last Data Query), the LLM analyzes that data for follow-up questions.
+    When user says 'yes' to graph or asks for one, returns chartOption for the frontend to display."""
     if not is_llm_configured():
         raise HTTPException(status_code=503, detail="Bedrock not configured. Create backend/bedrock_credentials.env with AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION, BEDROCK_MODEL_ID.")
-    answer = rag_chat(req.message, req.history)
-    return {"answer": answer}
+    answer, chart_option, extra_data, extra_sql = rag_chat(
+        req.message, req.history, req.context_snapshot
+    )
+    out = {"answer": answer, "chartOption": chart_option}
+    if extra_data is not None:
+        out["data"] = extra_data
+    if extra_sql is not None:
+        out["sql"] = extra_sql
+    return out

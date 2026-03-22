@@ -39,14 +39,25 @@ export interface AIQueryResponse {
   trades?: Record<string, unknown>[];
   sql?: string;
   chartOption?: Record<string, unknown> | null;
+  aiSummary?: string | null;
+  anomalyTradeIds?: string[];
   error?: string | null;
 }
 
 export interface AIChatResponse {
   answer: string;
+  chartOption?: Record<string, unknown> | null;
+  data?: Record<string, unknown>[];
+  sql?: string;
 }
 
-export async function aiQuery(question: string, context?: Record<string, unknown>): Promise<AIQueryResponse> {
+export async function aiQuery(
+  question: string,
+  context?: Record<string, unknown> & {
+    previousQueryResult?: { data: Record<string, unknown>[]; sql?: string };
+    conversationHistory?: { role: string; content: string }[];
+  }
+): Promise<AIQueryResponse> {
   const res = await fetch(`${API_BASE}/api/ai/query`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
@@ -59,11 +70,20 @@ export async function aiQuery(question: string, context?: Record<string, unknown
   return res.json();
 }
 
-export async function aiChat(message: string, history?: { role: string; content: string }[]): Promise<AIChatResponse> {
+export interface AIChatContextSnapshot {
+  data: Record<string, unknown>[];
+  sql?: string;
+}
+
+export async function aiChat(
+  message: string,
+  history?: { role: string; content: string }[],
+  contextSnapshot?: AIChatContextSnapshot | null
+): Promise<AIChatResponse> {
   const res = await fetch(`${API_BASE}/api/ai/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify({ message, history }),
+    body: JSON.stringify({ message, history, context_snapshot: contextSnapshot ?? undefined }),
   });
   if (!res.ok) {
     const detail = (await res.json().catch(() => ({}))).detail ?? res.statusText;
