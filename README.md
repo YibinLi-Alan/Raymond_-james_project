@@ -31,8 +31,13 @@ A real-time post-trade analytics dashboard built with React, featuring interacti
 ### Flexible Layout
 - Dockview-powered panel system
 - Drag and drop to rearrange panels
-- Close/restore panels via dropdown menu
+- Close/restore panels via dropdown menu (checkmarks reflect only panels currently visible)
 - Persistent layout (auto-saved to localStorage)
+
+### AI Assistant
+- **Data Query mode**: Natural-language SQL over trade data (e.g., "show notional by product", "chart volume by counterparty")
+- **General Chat mode**: Ask questions about your data, with context from the last query
+- **AI-generated charts**: Bar, line, pie, area, scatter, and doughnut charts; request a type (e.g., "I want a pie chart") and the AI will regenerate
 
 ## Tech Stack
 
@@ -44,14 +49,16 @@ A real-time post-trade analytics dashboard built with React, featuring interacti
 - **Dockview** - Flexible docking layout system
 - **Zustand** - State management
 - **date-fns** - Date manipulation
-- **SQLite** - Trade data store (same schema as in-memory mock; ready for **Vanna** text-to-SQL)
-- **FastAPI** - Optional backend that serves trades from SQLite
+- **SQLite** - Trade data store (same schema as in-memory mock)
+- **FastAPI** - Backend API (trades, AI endpoints)
+- **AWS Bedrock** - Claude for AI text-to-SQL and chart generation
 
 ## Getting Started
 
 ### Prerequisites
 - Node.js 18+
 - npm or yarn
+- Python 3.9+ (for backend and SQLite generation)
 
 ### Installation
 
@@ -85,12 +92,19 @@ Trade data can be served from a **SQLite database** so you can later plug in **V
 
 2. **Run the API** (from project root):
    ```bash
-   pip install fastapi uvicorn   # or use a venv
+   pip install -r requirements.txt   # or use a venv
    uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
    ```
    Then open the app at `http://localhost:5173`. It will load trades from `GET http://localhost:8000/api/trades`. If the API is not running, the app falls back to in-memory mock data.
 
-3. **Vanna**: Use `db/schema.sql` and `db/morning_blotter.db` with [Vanna](https://github.com/vanna-ai/vanna) for text-to-SQL. The schema includes tables `trades`, `securities`, `counterparties`, `traders`, `desks` and views such as `v_trades_full`, `v_daily_summary`, `v_counterparty_activity`, `v_trader_performance`.
+3. **AI features (optional)** – requires AWS Bedrock:
+   ```bash
+   cp backend/bedrock_credentials.env.example backend/bedrock_credentials.env
+   # Edit bedrock_credentials.env and add your AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION, BEDROCK_MODEL_ID
+   ```
+   Do not commit `bedrock_credentials.env`. The AI Assistant uses Claude on Bedrock for text-to-SQL and chart generation.
+
+4. **Vanna**: The backend uses `db/schema.sql` and `db/morning_blotter.db` for text-to-SQL. The schema includes tables `trades`, `securities`, `counterparties`, `traders`, `desks` and views such as `v_trades_full`, `v_daily_summary`, `v_counterparty_activity`, `v_trader_performance`.
 
 ## Usage
 
@@ -103,7 +117,9 @@ Trade data can be served from a **SQLite database** so you can later plug in **V
 
 3. **Filter by Asset Class**: Click on the sunburst chart segments to filter trades by BCLASS classification
 
-4. **Customize Layout**: Drag panel headers to rearrange, or use the Panels dropdown to show/hide panels
+4. **Customize Layout**: Use the Panels dropdown to show/hide panels. When a chart overlay (e.g., AI Graph) is active, only the visible panels are checked.
+
+5. **AI Data Query**: In the AI Assistant, ask questions like "chart notional by product" or "show me volume by counterparty as a pie chart". You can request specific chart types (pie, bar, line, area, scatter, doughnut).
 
 ## Project Structure
 
@@ -114,6 +130,9 @@ src/
     IntradayPriceChart.tsx # Intraday eval price visualization
     BClassSunburstChart.tsx# Asset class breakdown chart
     InsightsPanel.tsx      # Summary statistics
+    AIAssistant.tsx        # AI Data Query + General Chat
+    AIGraphPanel.tsx       # AI-generated chart display
+    AIDataTablePanel.tsx   # AI query result table
     DockviewLayout.tsx     # Panel layout manager
     ControlBar.tsx         # Top toolbar
   data/
@@ -122,17 +141,20 @@ src/
     bclassTaxonomy.ts      # BCLASS hierarchy
   api/
     client.ts              # Fetch trades from backend (SQLite)
+  store/
+    useBlotterStore.ts     # Zustand state management
+  types/
+    trade.ts               # TypeScript interfaces
 db/
   generate_sqlite.py       # Generate SQLite DB + schema (same data shape as mock)
   schema.sql               # Written by generate_sqlite (for Vanna)
   morning_blotter.db       # Generated SQLite DB (optional in .gitignore)
 backend/
-  main.py                  # FastAPI app: GET /api/trades, GET /api/health
+  main.py                  # FastAPI app: /api/trades, /api/health, AI routes
+  ai_routes.py             # AI Data Query + General Chat endpoints
+  vanna_service.py         # Text-to-SQL, chart generation (Bedrock)
+  bedrock_credentials.py   # Loads backend/bedrock_credentials.env
   db.py                    # SQLite access, camelCase response for frontend
-  store/
-    useBlotterStore.ts     # Zustand state management
-  types/
-    trade.ts               # TypeScript interfaces
 ```
 
 ## License
