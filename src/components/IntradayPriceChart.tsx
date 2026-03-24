@@ -41,12 +41,6 @@ export function IntradayPriceChart({
   selectedTradeId,
   aiChartOption,
 }: IntradayPriceChartProps) {
-  console.log('[IntradayPriceChart] Rendering with:', {
-    hasData: !!intradayData,
-    cusip: intradayData?.cusip,
-    selectedTradeId
-  });
-
   const enhancedAiOption = useMemo(
     () => (aiChartOption && Object.keys(aiChartOption).length > 0 ? enhanceChartOption(aiChartOption) : null),
     [aiChartOption]

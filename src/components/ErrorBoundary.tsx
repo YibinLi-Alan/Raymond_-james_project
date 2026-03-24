@@ -1,45 +1,68 @@
-import { Component, ErrorInfo, ReactNode } from 'react';
+import { Component, ReactNode } from 'react';
 
 interface Props {
   children: ReactNode;
+  fallback?: ReactNode;
 }
 
 interface State {
   hasError: boolean;
-  error: Error | null;
+  error?: Error;
 }
 
+/** Catches React errors and shows fallback instead of blank screen */
 export class ErrorBoundary extends Component<Props, State> {
-  state: State = { hasError: false, error: null };
+  constructor(props: Props) {
+    super(props);
+    this.state = { hasError: false };
+  }
 
   static getDerivedStateFromError(error: Error): State {
     return { hasError: true, error };
   }
 
-  componentDidCatch(error: Error, errorInfo: ErrorInfo): void {
-    console.error('ErrorBoundary caught:', error, errorInfo);
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    console.error('[ErrorBoundary] Caught error:', error, errorInfo);
   }
 
-  render(): ReactNode {
+  render() {
     if (this.state.hasError && this.state.error) {
-      return (
+      return this.props.fallback ?? (
         <div style={{
           padding: 24,
-          fontFamily: 'monospace',
+          fontFamily: 'system-ui, sans-serif',
           color: '#e0e0e0',
-          background: '#121212',
+          backgroundColor: '#1e1e1e',
           minHeight: '100vh',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
         }}>
-          <h2 style={{ color: '#CF6679' }}>Something went wrong</h2>
-          <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-            {this.state.error.toString()}
+          <h2 style={{ marginBottom: 16 }}>Something went wrong</h2>
+          <pre style={{
+            padding: 16,
+            backgroundColor: '#2d2d2d',
+            borderRadius: 8,
+            overflow: 'auto',
+            maxWidth: '80%',
+            fontSize: 12,
+          }}>
+            {this.state.error.message}
           </pre>
           <button
-            type="button"
-            onClick={() => this.setState({ hasError: false, error: null })}
-            style={{ marginTop: 16, padding: '8px 16px', cursor: 'pointer' }}
+            onClick={() => window.location.reload()}
+            style={{
+              marginTop: 16,
+              padding: '8px 16px',
+              cursor: 'pointer',
+              backgroundColor: '#4dabf7',
+              border: 'none',
+              borderRadius: 4,
+              color: '#1e1e1e',
+            }}
           >
-            Try again
+            Reload page
           </button>
         </div>
       );

@@ -1,15 +1,11 @@
-import { useCallback, useRef, useEffect, useState } from 'react';
+import { useCallback, useRef, useEffect, useState, useMemo } from 'react';
 import { useBlotterStore } from '../store/useBlotterStore';
 import { Trade, IntradayData } from '../types/trade';
+import { BClassFilter } from './BClassSunburstChart';
 import { InsightsPanel } from './InsightsPanel';
-import { BClassSunburstChart, BClassFilter } from './BClassSunburstChart';
-import { BClassTreemapChart } from './BClassTreemapChart';
-import { TradeGrid } from './TradeGrid';
-import { IntradayPriceChart } from './IntradayPriceChart';
-import { YieldCurveScatterPanel } from './YieldCurveScatterPanel';
 import { AIAssistant } from './AIAssistant';
 import { AIDataTablePanel } from './AIDataTablePanel';
-import { AIGraphPanel } from './AIGraphPanel';
+import { PanelContent, type PanelId, type PanelParams } from './PanelContent';
 
 const ALL_PANEL_IDS = [
   'insights',
@@ -22,7 +18,6 @@ const ALL_PANEL_IDS = [
   'aiDataTable',
   'aiGraphPanel',
 ] as const;
-type PanelId = (typeof ALL_PANEL_IDS)[number];
 
 interface PanelDefinition {
   id: string;
@@ -38,7 +33,11 @@ export interface DockviewLayoutHandle {
   closePanel: (panelId: string) => void;
   resetLayout: () => void;
   canOpenMore: () => boolean;
+  /** True if this panel can be opened (considers grid/aiDataTable mutual replacement) */
+  canOpenPanel: (panelId: string) => boolean;
 }
+
+const DEFAULT_PANELS_FALLBACK: readonly string[] = ['aiAssistant', 'aiDataTable', 'insights'];
 
 const PANEL_DEFINITIONS: PanelDefinition[] = [
   { id: 'insights', title: 'Daily Insights', component: 'insights' },
@@ -69,11 +68,11 @@ interface DockviewLayoutProps {
   onChartClick: (data: { date: string; product: string }) => void;
   onBclassClick: (filter: BClassFilter) => void;
   onTradeDoubleClick: (trade: Trade) => void;
-  onApiReady?: (handle: DockviewLayoutHandle) => void;
+  onApiReady?: (handle: DockviewLayoutHandle | null) => void;
 }
 
 export function DockviewLayout({
-  trades: _trades,
+  trades: allTrades,
   filteredTrades: _filteredTrades,
   displayTrades,
   isAIResult = false,
@@ -93,11 +92,25 @@ export function DockviewLayout({
 }: DockviewLayoutProps) {
   const apiRef = useRef<DockviewLayoutHandle | null>(null);
   const aiChartOption = useBlotterStore((s) => s.aiChartOption);
-  const visiblePanelIds = useBlotterStore((s) => s.visiblePanelIds);
+  const rawVisiblePanelIds = useBlotterStore((s) => s.visiblePanelIds);
+  // Safeguard: use stable fallback to avoid new-array-every-render causing effect loops
+  const visiblePanelIds = Array.isArray(rawVisiblePanelIds) && rawVisiblePanelIds.length > 0
+    ? rawVisiblePanelIds
+    : DEFAULT_PANELS_FALLBACK;
   const activeChartPanel = useBlotterStore((s) => s.activeChartPanel);
   const openPanel = useBlotterStore((s) => s.openPanel);
   const closePanel = useBlotterStore((s) => s.closePanel);
   const resetLayout = useBlotterStore((s) => s.resetLayout);
+
+  const gridParams = useMemo(
+    () => ({
+      trades: allTrades,
+      quickFilterText,
+      selectedTradeId,
+      onRowDoubleClick: onTradeDoubleClick,
+    }),
+    [allTrades, quickFilterText, selectedTradeId, onTradeDoubleClick]
+  );
 
   const getPanelParams = useCallback(
     (panelId: string) => {
@@ -108,12 +121,7 @@ export function DockviewLayout({
         case 'treemapChart':
           return { trades: displayTrades, selectedFilter: bclassFilter, onSegmentClick: onBclassClick };
         case 'grid':
-          return {
-            trades: displayTrades,
-            quickFilterText,
-            selectedTradeId,
-            onRowDoubleClick: onTradeDoubleClick,
-          };
+          return gridParams;
         case 'intradayChart':
           return { intradayData, selectedTradeId, aiChartOption: aiChartOption ?? null };
         case 'yieldCurve':
@@ -125,15 +133,13 @@ export function DockviewLayout({
       }
     },
     [
+      gridParams,
       displayTrades,
-      quickFilterText,
       tradeCount,
       totalNotional,
       bclassFilter,
       intradayData,
-      selectedTradeId,
       onBclassClick,
-      onTradeDoubleClick,
       aiChartOption,
     ]
   );
@@ -164,132 +170,102 @@ export function DockviewLayout({
     [visiblePanelIds]
   );
 
-  apiRef.current = {
-    getPanelDefinitions: () => PANEL_DEFINITIONS,
-    getClosedPanels,
-    isPanelOpen,
-    restorePanel: handleRestorePanel,
-    closePanel: handleClosePanel,
-    resetLayout: handleResetLayout,
-    canOpenMore,
-  };
+  const canOpenPanel = useCallback(
+    (panelId: string) => {
+      if (visiblePanelIds.includes(panelId)) return true; // Already open
+      if (panelId === 'aiAssistant') return false; // Always "open", can't re-open
+      if (visiblePanelIds.length < 4) return true;
+      // At max: can open grid/aiDataTable by replacing the other
+      if (panelId === 'grid' && visiblePanelIds.includes('aiDataTable')) return true;
+      if (panelId === 'aiDataTable' && visiblePanelIds.includes('grid')) return true;
+      return false;
+    },
+    [visiblePanelIds]
+  );
+
+  // Mutate in place so parent keeps same reference and always has latest callbacks (avoids setState loop)
+  if (!apiRef.current) {
+    apiRef.current = {
+      getPanelDefinitions: () => PANEL_DEFINITIONS,
+      getClosedPanels: () => [],
+      isPanelOpen: () => false,
+      restorePanel: () => {},
+      closePanel: () => {},
+      resetLayout: () => {},
+      canOpenMore: () => true,
+      canOpenPanel: () => true,
+    };
+  }
+  apiRef.current.getPanelDefinitions = () => PANEL_DEFINITIONS;
+  apiRef.current.getClosedPanels = getClosedPanels;
+  apiRef.current.isPanelOpen = isPanelOpen;
+  apiRef.current.restorePanel = handleRestorePanel;
+  apiRef.current.closePanel = handleClosePanel;
+  apiRef.current.resetLayout = handleResetLayout;
+  apiRef.current.canOpenMore = canOpenMore;
+  apiRef.current.canOpenPanel = canOpenPanel;
 
   useEffect(() => {
     onApiReady?.(apiRef.current!);
-  }, [
-    onApiReady,
-    visiblePanelIds,
-    handleRestorePanel,
-    handleClosePanel,
-    handleResetLayout,
-    getClosedPanels,
-    isPanelOpen,
-    canOpenMore,
-  ]);
+    return () => onApiReady?.(null);
+  }, [onApiReady]);
 
-  const renderPanelContent = (panelId: PanelId) => {
-    const params = getPanelParams(panelId) as Record<string, unknown>;
-    switch (panelId) {
-      case 'insights':
-        return (
-          <InsightsPanel
-            trades={params.trades as Trade[]}
-            tradeCount={params.tradeCount as number}
-            totalNotional={params.totalNotional as number}
-          />
-        );
-      case 'sunburstChart':
-        return (
-          <BClassSunburstChart
-            trades={params.trades as Trade[]}
-            selectedFilter={params.selectedFilter as BClassFilter | null}
-            onSegmentClick={params.onSegmentClick as (f: BClassFilter) => void}
-          />
-        );
-      case 'treemapChart':
-        return (
-          <BClassTreemapChart
-            trades={params.trades as Trade[]}
-            selectedFilter={params.selectedFilter as BClassFilter | null}
-            onSegmentClick={params.onSegmentClick as (f: BClassFilter) => void}
-          />
-        );
-      case 'grid':
-        return (
-          <TradeGrid
-            trades={params.trades as Trade[]}
-            quickFilterText={params.quickFilterText as string}
-            selectedTradeId={params.selectedTradeId as string | null}
-            onRowDoubleClick={params.onRowDoubleClick as (t: Trade) => void}
-          />
-        );
-      case 'intradayChart':
-        return (
-          <IntradayPriceChart
-            intradayData={params.intradayData as IntradayData | null}
-            selectedTradeId={params.selectedTradeId as string | null}
-            aiChartOption={params.aiChartOption as Record<string, unknown> | null}
-          />
-        );
-      case 'yieldCurve':
-        return <YieldCurveScatterPanel trades={params.trades as Trade[]} />;
-      case 'aiAssistant':
-        return <AIAssistant />;
-      case 'aiDataTable':
-        return <AIDataTablePanel />;
-      case 'aiGraphPanel':
-        return <AIGraphPanel />;
-      default:
-        return null;
-    }
-  };
+  const renderPanelContent = useCallback(
+    (panelId: PanelId) => {
+      const params = getPanelParams(panelId) as PanelParams;
+      return <PanelContent panelId={panelId} params={params} />;
+    },
+    [getPanelParams]
+  );
 
   const showAiDataTable = visiblePanelIds.includes('aiDataTable');
   const showInsights = visiblePanelIds.includes('insights');
   const showGrid = visiblePanelIds.includes('grid');
-  const hasChartOverlay = activeChartPanel && visiblePanelIds.includes(activeChartPanel);
+  const CHART_IDS = ['aiGraphPanel', 'sunburstChart', 'treemapChart', 'intradayChart', 'yieldCurve'];
+  // Only show chart overlay when activeChartPanel is valid and still in layout
+  const hasChartOverlay = Boolean(
+    activeChartPanel &&
+    visiblePanelIds.includes(activeChartPanel) &&
+    CHART_IDS.includes(activeChartPanel)
+  );
   const showMiddleContent = showAiDataTable || showGrid;
 
   // Resizable left slot width (25% default, user can drag sash)
   const [leftWidthPercent, setLeftWidthPercent] = useState(25);
   const sashRef = useRef<HTMLDivElement>(null);
+  const widthRef = useRef(25);
+  widthRef.current = leftWidthPercent;
 
   useEffect(() => {
     const sash = sashRef.current;
     if (!sash) return;
-    let startX = 0;
-    let startWidth = 0;
     const onMouseDown = (e: MouseEvent) => {
-      startX = e.clientX;
-      startWidth = leftWidthPercent;
+      const startX = e.clientX;
+      const startWidth = widthRef.current;
+      const onMouseMove = (ev: MouseEvent) => {
+        const dx = ev.clientX - startX;
+        const container = sash.closest('.dockview-wrapper');
+        if (!container) return;
+        const totalW = container.getBoundingClientRect().width;
+        const deltaPercent = (dx / totalW) * 100;
+        const next = Math.max(15, Math.min(45, startWidth + deltaPercent));
+        setLeftWidthPercent(next);
+        widthRef.current = next;
+      };
+      const onMouseUp = () => {
+        document.removeEventListener('mousemove', onMouseMove);
+        document.removeEventListener('mouseup', onMouseUp);
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+      };
       document.addEventListener('mousemove', onMouseMove);
       document.addEventListener('mouseup', onMouseUp);
       document.body.style.cursor = 'col-resize';
       document.body.style.userSelect = 'none';
     };
-    const onMouseMove = (e: MouseEvent) => {
-      const dx = e.clientX - startX;
-      const container = sash.closest('.dockview-wrapper');
-      if (!container) return;
-      const totalW = container.getBoundingClientRect().width;
-      const deltaPercent = (dx / totalW) * 100;
-      let next = startWidth + deltaPercent;
-      next = Math.max(15, Math.min(45, next));
-      setLeftWidthPercent(next);
-    };
-    const onMouseUp = () => {
-      document.removeEventListener('mousemove', onMouseMove);
-      document.removeEventListener('mouseup', onMouseUp);
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-    };
     sash.addEventListener('mousedown', onMouseDown);
-    return () => {
-      sash.removeEventListener('mousedown', onMouseDown);
-      document.removeEventListener('mousemove', onMouseMove);
-      document.removeEventListener('mouseup', onMouseUp);
-    };
-  }, [leftWidthPercent]);
+    return () => sash.removeEventListener('mousedown', onMouseDown);
+  }, []);
 
   return (
     <div className="dockview-wrapper dashboard-4col-layout">
@@ -337,7 +313,7 @@ export function DockviewLayout({
               >
                 <div className="dockview-panel-content slot-panel">
                   <InsightsPanel
-                    trades={displayTrades}
+                    trades={Array.isArray(displayTrades) ? displayTrades : []}
                     tradeCount={tradeCount}
                     totalNotional={totalNotional}
                   />

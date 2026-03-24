@@ -75,6 +75,24 @@ function tradesToExportData(
   });
 }
 
+/** Export AI Data Table (any columns from query result) to Excel */
+export async function exportAIDataToExcel(
+  data: Record<string, unknown>[],
+  filename?: string
+): Promise<void> {
+  if (!Array.isArray(data) || data.length === 0) return;
+
+  const worksheet = XLSX.utils.json_to_sheet(data);
+  const colWidths = Object.keys(data[0] ?? {}).map(() => ({ wch: 18 }));
+  worksheet['!cols'] = colWidths;
+
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, 'AI Data');
+
+  const outputFilename = filename || `ai_data_table_${formatDateForFilename()}.xlsx`;
+  XLSX.writeFile(workbook, outputFilename);
+}
+
 // Export to Excel
 export async function exportToExcel(
   trades: Trade[],

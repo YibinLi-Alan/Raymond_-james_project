@@ -165,6 +165,7 @@ const defaultSortModel: SortModel[] = [
 ];
 
 // Layout: default visible panels (AI Assistant + AI Data Table + Daily Insights)
+// Note: Trade Blotter (grid) causes update loop if shown by default; use Panels menu to open it
 const DEFAULT_VISIBLE_PANELS = ['aiAssistant', 'aiDataTable', 'insights'];
 const MAX_PANELS = 4;
 const CHART_PANEL_IDS = ['aiGraphPanel', 'sunburstChart', 'treemapChart', 'intradayChart', 'yieldCurve'];
@@ -213,10 +214,7 @@ export const useBlotterStore = create<BlotterState>()(
 
       setChartDateFilter: (filter) => set({ chartDateFilter: filter }),
 
-      setSelectedTradeId: (tradeId) => {
-        console.log('[Zustand] setSelectedTradeId called with:', tradeId);
-        set({ selectedTradeId: tradeId });
-      },
+      setSelectedTradeId: (tradeId) => set({ selectedTradeId: tradeId }),
 
       toggleChartDateFilter: (date) => {
         const current = get().chartDateFilter;
@@ -308,6 +306,7 @@ export const useBlotterStore = create<BlotterState>()(
           quickFilterText: '',
           dateRange: defaultDateRange,
           chartDateFilter: null,
+          selectedTradeId: null,
           columnState: [],
           filterModel: {},
           sortModel: defaultSortModel,
@@ -324,33 +323,34 @@ export const useBlotterStore = create<BlotterState>()(
       setVisiblePanelIds: (ids) => set({ visiblePanelIds: ids }),
       openPanel: (panelId) => {
         const state = get();
-        if (state.visiblePanelIds.includes(panelId)) {
-          if (CHART_PANEL_IDS.includes(panelId)) {
-            set({ activeChartPanel: panelId });
-          } else if (state.activeChartPanel) {
-            // Switching to a non-chart panel (insights/grid/aiDataTable) - clear overlay to show it
-            set({ activeChartPanel: null });
-          }
+        const isGraph = CHART_PANEL_IDS.includes(panelId);
+
+        if (isGraph) {
+          // Opening a graph: keep only AI Assistant + this graph, show chart overlay
+          set({
+            visiblePanelIds: ['aiAssistant', panelId],
+            activeChartPanel: panelId,
+          });
           return;
         }
-        let next = state.visiblePanelIds.filter(
+
+        // Opening a non-graph (insights, grid, aiDataTable): close graph overlay, show base layout
+        let next = state.visiblePanelIds.filter((id) => !CHART_PANEL_IDS.includes(id));
+        if (state.visiblePanelIds.includes(panelId)) {
+          set({ visiblePanelIds: next, activeChartPanel: null });
+          return;
+        }
+        next = next.filter(
           (id) =>
             !(
               (panelId === 'grid' && id === 'aiDataTable') ||
               (panelId === 'aiDataTable' && id === 'grid')
             )
         );
-        if (next.length >= MAX_PANELS) {
-          if (CHART_PANEL_IDS.includes(panelId) && state.activeChartPanel) {
-            next = next.filter((id) => id !== state.activeChartPanel);
-          } else {
-            return;
-          }
-        }
-        next = [...next, panelId];
+        if (next.length >= MAX_PANELS) return;
         set({
-          visiblePanelIds: next,
-          activeChartPanel: CHART_PANEL_IDS.includes(panelId) ? panelId : state.activeChartPanel,
+          visiblePanelIds: [...next, panelId],
+          activeChartPanel: null,
         });
       },
       closePanel: (panelId) => {
@@ -360,8 +360,8 @@ export const useBlotterStore = create<BlotterState>()(
         const next = state.visiblePanelIds.filter((id) => id !== panelId);
         let nextActive: string | null = state.activeChartPanel;
         if (state.activeChartPanel === panelId) {
-          const remaining = next.filter((id) => CHART_PANEL_IDS.includes(id));
-          nextActive = remaining.length > 0 ? remaining[remaining.length - 1] : null;
+          // Closing the active chart: return to base layout (don't auto-switch to another chart)
+          nextActive = null;
         }
         set({ visiblePanelIds: next, activeChartPanel: nextActive });
       },

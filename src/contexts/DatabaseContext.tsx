@@ -1,4 +1,4 @@
-import { createContext, useContext, ReactNode } from 'react';
+import { createContext, useContext, ReactNode, useMemo } from 'react';
 import type { Trade } from '../types/trade';
 
 /** Source of trade data: SQLite-backed API or in-memory mock. */
@@ -18,8 +18,9 @@ interface DatabaseProviderProps {
 }
 
 export function DatabaseProvider({ db, children }: DatabaseProviderProps) {
+  const value = useMemo(() => ({ db }), [db]);
   return (
-    <DatabaseContext.Provider value={{ db }}>
+    <DatabaseContext.Provider value={value}>
       {children}
     </DatabaseContext.Provider>
   );

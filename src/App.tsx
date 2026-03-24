@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect } from 'react';
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { ControlBar } from './components/ControlBar';
 import { DockviewLayout, DockviewLayoutHandle } from './components/DockviewLayout';
 import { PanelsDropdown } from './components/PanelsDropdown';
@@ -10,7 +10,7 @@ import { fetchTrades } from './api/client';
 import { getIntradayDataForTrade } from './data/evalPriceGenerator';
 import { Trade, IntradayData } from './types/trade';
 import { useBlotterStore } from './store/useBlotterStore';
-import { exportToExcel, copyToClipboard } from './utils/excelExport';
+import { exportToExcel, exportAIDataToExcel } from './utils/excelExport';
 
 // Chart interaction state
 interface ChartSelection {
@@ -61,15 +61,14 @@ function App() {
   // BCLASS filter (from sunburst chart)
   const [bclassFilter, setBclassFilter] = useState<BClassFilter | null>(null);
 
-  // Intraday chart state (from trade double-click)
-  const [selectedTrade, setSelectedTrade] = useState<Trade | null>(null);
+  // Intraday chart data (derived from selected trade in store)
   const [intradayData, setIntradayData] = useState<IntradayData | null>(null);
 
   // Get state from Zustand store (including AI query result for full-dashboard linkage)
   const {
     quickFilterText,
     setQuickFilterText,
-    resetFilters,
+    resetToDefaults,
     selectedTradeId: storeSelectedTradeId,
     setSelectedTradeId,
     aiQueryResult,
@@ -104,17 +103,18 @@ function App() {
 
   // When AI returns trade-like data, all panels use it (including empty []); otherwise use filteredTrades
   const displayTrades = useMemo(() => {
-    if (aiQueryResult?.trades != null) {
+    if (aiQueryResult?.trades != null && Array.isArray(aiQueryResult.trades)) {
       return aiQueryResult.trades as Trade[];
     }
-    return filteredTrades;
+    return Array.isArray(filteredTrades) ? filteredTrades : [];
   }, [aiQueryResult?.trades, filteredTrades]);
 
   // Summary stats and counts from the data actually shown across all panels
   const { tradeCount, totalNotional } = useMemo(() => {
+    const trades = Array.isArray(displayTrades) ? displayTrades : [];
     return {
-      tradeCount: displayTrades.length,
-      totalNotional: displayTrades.reduce((sum, trade) => sum + trade.notionalUsd, 0),
+      tradeCount: trades.length,
+      totalNotional: trades.reduce((sum, trade) => sum + (trade?.notionalUsd ?? 0), 0),
     };
   }, [displayTrades]);
 
@@ -138,31 +138,25 @@ function App() {
 
   const handleExport = useCallback(async () => {
     try {
-      await exportToExcel(displayTrades);
+      const hasAIData = aiQueryResult?.data != null && Array.isArray(aiQueryResult.data) && aiQueryResult.data.length > 0;
+      if (hasAIData) {
+        await exportAIDataToExcel(aiQueryResult.data as Record<string, unknown>[]);
+      } else {
+        await exportToExcel(allTrades);
+      }
     } catch (error) {
       console.error('Export failed:', error);
     }
-  }, [displayTrades]);
-
-  // Copy to clipboard function
-  const _handleCopy = useCallback(async () => {
-    try {
-      await copyToClipboard(displayTrades);
-    } catch (error) {
-      console.error('Copy failed:', error);
-    }
-  }, [displayTrades]);
-  void _handleCopy;
+  }, [aiQueryResult?.data, allTrades]);
 
   const handleReset = useCallback(() => {
-    resetFilters();
+    resetToDefaults();
     setSelectedPoint(null);
     setHoverContext(null);
     setBclassFilter(null);
-    setSelectedTrade(null);
     setIntradayData(null);
     setSelectedTradeId(null);
-  }, [resetFilters, setSelectedTradeId]);
+  }, [resetToDefaults, setSelectedTradeId]);
 
   // Chart interaction handlers
   const handleChartHover = useCallback((data: ChartSelection | null) => {
@@ -210,30 +204,30 @@ function App() {
     setSelectedTradeId(trade.internalTradeId);
   }, [setSelectedTradeId]);
 
-  // React to Zustand store selectedTradeId changes - this is the MAIN path for double-click
-  // Use displayTrades so intraday chart stays in sync with current view (including AI result)
+  // React to store selectedTradeId: compute intraday data for charts
   useEffect(() => {
     if (storeSelectedTradeId) {
-      const trade = displayTrades.find((t: Trade) => t.internalTradeId === storeSelectedTradeId)
-        ?? allTrades.find((t: Trade) => t.internalTradeId === storeSelectedTradeId);
+      const trade =
+        allTrades.find((t: Trade) => t.internalTradeId === storeSelectedTradeId) ??
+        displayTrades.find((t: Trade) => t.internalTradeId === storeSelectedTradeId);
       if (trade) {
-        setSelectedTrade(trade);
-        const data = getIntradayDataForTrade(trade, displayTrades);
-        setIntradayData(data);
+        setIntradayData(getIntradayDataForTrade(trade, allTrades));
+      } else {
+        setIntradayData(null);
       }
+    } else {
+      setIntradayData(null);
     }
   }, [storeSelectedTradeId, displayTrades, allTrades]);
 
-  // Auto-select the first trade to show intraday data by default (from current display set)
+  // Auto-select first trade once on initial load (use length to avoid array-ref dependency loop)
+  const hasAutoSelected = useRef(false);
+  const displayCount = displayTrades.length;
   useEffect(() => {
-    if (displayTrades.length > 0 && !selectedTrade && !storeSelectedTradeId) {
-      const firstTrade = displayTrades[0];
-      setSelectedTrade(firstTrade);
-      setSelectedTradeId(firstTrade.internalTradeId);
-      const data = getIntradayDataForTrade(firstTrade, displayTrades);
-      setIntradayData(data);
-    }
-  }, [displayTrades, allTrades, selectedTrade, storeSelectedTradeId, setSelectedTradeId]);
+    if (hasAutoSelected.current || displayCount === 0 || storeSelectedTradeId) return;
+    hasAutoSelected.current = true;
+    setSelectedTradeId(displayTrades[0].internalTradeId);
+  }, [displayCount, storeSelectedTradeId, setSelectedTradeId]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -282,7 +276,7 @@ function App() {
         selectedPoint={selectedPoint}
         bclassFilter={bclassFilter}
         intradayData={intradayData}
-        selectedTradeId={selectedTrade?.internalTradeId ?? null}
+        selectedTradeId={storeSelectedTradeId ?? null}
         onChartHover={handleChartHover}
         onChartClick={handleChartClick}
         onBclassClick={handleBclassClick}

@@ -75,8 +75,8 @@ export function PanelsDropdown({ layoutHandle }: PanelsDropdownProps) {
       if (isOpen) {
         handleClosePanel(panelId);
       } else {
-        // Only block if we'd add a new panel and we're at max
-        if (isInLayout || !layoutHandle || layoutHandle.canOpenMore()) {
+        const canOpen = layoutHandle?.canOpenPanel ? layoutHandle.canOpenPanel(panelId) : (layoutHandle?.canOpenMore?.() ?? true);
+        if (isInLayout || !layoutHandle || canOpen) {
           handleRestorePanel(panelId);
         }
       }
@@ -115,7 +115,8 @@ export function PanelsDropdown({ layoutHandle }: PanelsDropdownProps) {
           )}
           {panelStates.map((panel) => {
             const wouldAddPanel = !panel.isInLayout;
-            const cannotAdd = wouldAddPanel && layoutHandle && !layoutHandle.canOpenMore();
+            const canOpen = layoutHandle?.canOpenPanel ? layoutHandle.canOpenPanel(panel.id) : layoutHandle?.canOpenMore?.() ?? true;
+            const cannotAdd = wouldAddPanel && layoutHandle && !canOpen;
             return (
             <button
               key={panel.id}

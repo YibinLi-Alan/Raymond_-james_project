@@ -1,4 +1,4 @@
-import { useMemo, useCallback, useRef, useState, useEffect } from 'react';
+import { useMemo, useCallback, useRef, useState, useEffect, memo } from 'react';
 import { AgGridReact } from 'ag-grid-react';
 import {
   ColDef,
@@ -211,29 +211,27 @@ class CustomSetFilter implements IFilterComp {
   }
 }
 
-export function TradeGrid({ trades, quickFilterText, selectedTradeId, onRowDoubleClick }: TradeGridProps) {
+const EMPTY_STRING_ARRAY: readonly string[] = [];
+
+function TradeGridInner({ trades, quickFilterText, selectedTradeId, onRowDoubleClick }: TradeGridProps) {
   const gridRef = useRef<AgGridReact>(null);
   const gridApiRef = useRef<GridApi | null>(null);
   const [isColumnPanelOpen, setIsColumnPanelOpen] = useState(false);
   const [copiedText, setCopiedText] = useState<string | null>(null);
+  const tradesRef = useRef<Trade[]>([]);
+  tradesRef.current = trades;
 
-  // Get Zustand store action directly - this bypasses dockview params entirely
   const setSelectedTradeId = useBlotterStore((state) => state.setSelectedTradeId);
+  const openPanel = useBlotterStore((state) => state.openPanel);
+  const anomalyTradeIds = useBlotterStore((s) => s.aiQueryResult?.anomalyTradeIds) ?? EMPTY_STRING_ARRAY;
 
-  // Handle row double-click for intraday chart
-  // Uses Zustand store directly to bypass dockview params system which has stale callbacks
   const handleRowDoubleClick = useCallback((event: RowDoubleClickedEvent<Trade>) => {
-    console.log('[TradeGrid] Double-click event fired:', event.data?.internalTradeId);
     if (event.data) {
-      // Update Zustand store directly - this is the reliable approach
-      console.log('[TradeGrid] Calling setSelectedTradeId with:', event.data.internalTradeId);
       setSelectedTradeId(event.data.internalTradeId);
-      // Also call the callback if provided (as fallback)
+      openPanel('intradayChart');
       onRowDoubleClick?.(event.data);
     }
-  }, [setSelectedTradeId, onRowDoubleClick]);
-
-  const anomalyTradeIds = useBlotterStore((s) => s.aiQueryResult?.anomalyTradeIds ?? []);
+  }, [setSelectedTradeId, openPanel, onRowDoubleClick]);
 
   // Row class rules: selected row, anomaly highlight (red)
   const rowClassRules = useMemo(
@@ -449,9 +447,9 @@ export function TradeGrid({ trades, quickFilterText, selectedTradeId, onRowDoubl
 
   const onGridReady = useCallback((params: GridReadyEvent) => {
     gridApiRef.current = params.api;
-    const data = Array.isArray(trades) ? trades : [];
+    const data = Array.isArray(tradesRef.current) ? tradesRef.current : [];
     params.api.setRowData(data);
-  }, [trades]);
+  }, []);
 
   // Keep grid in sync when trades prop changes (e.g. AI query result → displayTrades)
   useEffect(() => {
@@ -601,3 +599,5 @@ export function TradeGrid({ trades, quickFilterText, selectedTradeId, onRowDoubl
     </div>
   );
 }
+
+export const TradeGrid = memo(TradeGridInner);
