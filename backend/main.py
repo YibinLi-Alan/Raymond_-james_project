@@ -8,18 +8,34 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.db import fetch_all_trades
 from backend.ai_routes import router as ai_router
+from backend.anomaly_routes import router as anomaly_router
 
 app = FastAPI(title="Morning Blotter API", version="1.0.0")
 
+# app.add_middleware(
+#     CORSMiddleware,
+#     # allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+#     allow_origins=[
+#     "http://localhost:5173",
+#     "http://localhost:5174",
+#     "http://localhost:5175",
+#     "http://localhost:5176"],
+#     allow_credentials=True,
+#     allow_methods=["*"],
+#     allow_headers=["*"],
+# )
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+
 app.include_router(ai_router)
+app.include_router(anomaly_router)
 
 
 @app.get("/api/health")

@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import type { SizeAnomaly, FrequencyAnomaly } from '../api/client';
 
 // Filter model type
 export interface FilterModel {
@@ -148,6 +149,25 @@ interface BlotterState {
   setAIChartOption: (option: AIChartOption) => void;
   clearAIResult: () => void;
   getGridFilterContext: () => { quickFilterText: string; filterModel: FilterModel; dateRange: DateRange };
+
+  // Anomaly Detection State
+  sizeAnomalyIds: string[];
+  sizeAnomalyDetails: SizeAnomaly[];
+  frequencyAnomalies: FrequencyAnomaly[];
+  anomalyDayPercentile: number | null;
+  anomalyIsLoading: boolean;
+  anomalyLastComputedAt: string | null;
+
+  // Anomaly actions
+  setAnomalyState: (data: {
+    sizeAnomalyIds: string[];
+    sizeAnomalyDetails: SizeAnomaly[];
+    frequencyAnomalies: FrequencyAnomaly[];
+    dayPercentile: number;
+    lastComputedAt: string;
+  }) => void;
+  setAnomalyLoading: (loading: boolean) => void;
+  clearAnomalyState: () => void;
 }
 
 // Default values
@@ -206,6 +226,14 @@ export const useBlotterStore = create<BlotterState>()(
       lastAiQueryResult: null,
       isAILoading: false,
       aiChartOption: null,
+
+      // Anomaly Detection
+      sizeAnomalyIds: [],
+      sizeAnomalyDetails: [],
+      frequencyAnomalies: [],
+      anomalyDayPercentile: null,
+      anomalyIsLoading: false,
+      anomalyLastComputedAt: null,
 
       // Actions
       setQuickFilterText: (text) => set({ quickFilterText: text }),
@@ -377,6 +405,24 @@ export const useBlotterStore = create<BlotterState>()(
       setAILoading: (loading) => set({ isAILoading: loading }),
       setAIChartOption: (option) => set({ aiChartOption: option }),
       clearAIResult: () => set({ aiQueryResult: null, lastAiQueryResult: null, aiChartOption: null }),
+
+      setAnomalyState: (data) => set({
+        sizeAnomalyIds: data.sizeAnomalyIds,
+        sizeAnomalyDetails: data.sizeAnomalyDetails,
+        frequencyAnomalies: data.frequencyAnomalies,
+        anomalyDayPercentile: data.dayPercentile,
+        anomalyLastComputedAt: data.lastComputedAt,
+      }),
+      setAnomalyLoading: (loading) => set({ anomalyIsLoading: loading }),
+      clearAnomalyState: () => set({
+        sizeAnomalyIds: [],
+        sizeAnomalyDetails: [],
+        frequencyAnomalies: [],
+        anomalyDayPercentile: null,
+        anomalyIsLoading: false,
+        anomalyLastComputedAt: null,
+      }),
+
       getGridFilterContext: () => {
         const state = get();
         return {

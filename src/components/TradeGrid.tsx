@@ -11,10 +11,12 @@ import {
   IFilterParams,
   IDoesFilterPassParams,
   RowDoubleClickedEvent,
+  ITooltipParams,
 } from 'ag-grid-community';
 import { Trade } from '../types/trade';
 import { ColumnToolPanel } from './ColumnToolPanel';
 import { useBlotterStore } from '../store/useBlotterStore';
+import type { SizeAnomaly } from '../api/client';
 
 import 'ag-grid-community/styles/ag-grid.css';
 import 'ag-grid-community/styles/ag-theme-alpine.css';
@@ -233,15 +235,26 @@ function TradeGridInner({ trades, quickFilterText, selectedTradeId, onRowDoubleC
     }
   }, [setSelectedTradeId, openPanel, onRowDoubleClick]);
 
-  // Row class rules: selected row, anomaly highlight (red)
+  const sizeAnomalyIds = useBlotterStore((s) => s.sizeAnomalyIds);
+  const sizeAnomalyDetails = useBlotterStore((s) => s.sizeAnomalyDetails);
+  // Set for O(1) row-class checks; Map for tooltip lookups — both keyed by tradeId
+  const sizeAnomalyIdSet = useMemo(() => new Set(sizeAnomalyIds), [sizeAnomalyIds]);
+  const sizeAnomalyMap = useMemo(
+    () => new Map<string, SizeAnomaly>(sizeAnomalyDetails.map((a) => [a.tradeId, a])),
+    [sizeAnomalyDetails]
+  );
+
+  // Row class rules: selected row | AI anomaly (red) | size anomaly (amber)
   const rowClassRules = useMemo(
     () => ({
       'selected-trade-row': (params: RowClassParams<Trade>) =>
         params.data?.internalTradeId === selectedTradeId,
       'anomaly-trade-row': (params: RowClassParams<Trade>) =>
         !!params.data?.internalTradeId && anomalyTradeIds.includes(params.data.internalTradeId),
+      'size-anomaly-row': (params: RowClassParams<Trade>) =>
+        !!params.data?.internalTradeId && sizeAnomalyIdSet.has(params.data.internalTradeId),
     }),
-    [selectedTradeId, anomalyTradeIds]
+    [selectedTradeId, anomalyTradeIds, sizeAnomalyIdSet]
   );
 
   // Default visible columns: Trade Id, Side, Cusip, Ticker, Notional, Price, Yield, Counterparty
@@ -437,18 +450,29 @@ function TradeGridInner({ trades, quickFilterText, selectedTradeId, onRowDoubleC
     },
   ], []);
 
-  const defaultColDef = useMemo<ColDef>(() => ({
+  const defaultColDef = useMemo<ColDef<Trade>>(() => ({
     sortable: true,
     resizable: true,
     filter: true,
     floatingFilter: false,
-    suppressHeaderMenuButton: true, // Hide the menu button but keep filter functionality
-  }), []);
+    suppressHeaderMenuButton: true,
+    tooltipValueGetter: (params: ITooltipParams<Trade>) => {
+      const tradeId = params.data?.internalTradeId;
+      if (!tradeId) return undefined;
+      const anomaly = sizeAnomalyMap.get(tradeId);
+      if (!anomaly) return undefined;
+      const notional = formatCurrency(anomaly.notionalUsd);
+      const mean = formatCurrency(anomaly.cpMeanNotionalUsd);
+      const z = Math.abs(anomaly.zScore).toFixed(1);
+      const dir = anomaly.direction === 'HIGH' ? 'above' : 'below';
+      return `⚠ Size anomaly: ${notional} is ${z}σ ${dir} ${anomaly.counterpartyName}'s mean (${mean})`;
+    },
+  }), [sizeAnomalyMap]);
 
   const onGridReady = useCallback((params: GridReadyEvent) => {
     gridApiRef.current = params.api;
     const data = Array.isArray(tradesRef.current) ? tradesRef.current : [];
-    params.api.setRowData(data);
+    params.api.setGridOption('rowData', data);
   }, []);
 
   // Keep grid in sync when trades prop changes (e.g. AI query result → displayTrades)
@@ -457,7 +481,7 @@ function TradeGridInner({ trades, quickFilterText, selectedTradeId, onRowDoubleC
     if (api) {
       try {
         const data = Array.isArray(trades) ? trades : [];
-        api.setRowData(data);
+        api.setGridOption('rowData', data);
       } catch (_) {
         // Guard against grid not ready or API transition
       }
@@ -568,6 +592,11 @@ function TradeGridInner({ trades, quickFilterText, selectedTradeId, onRowDoubleC
 
   return (
     <div className="trade-grid-wrapper">
+      {sizeAnomalyIds.length > 0 && (
+        <div className="insights-anomaly-legend">
+          🟡 Amber rows indicate statistical size anomalies (trades more than 2σ from counterparty mean)
+        </div>
+      )}
       <div className="trade-grid-container ag-theme-alpine-dark">
         <AgGridReact<Trade>
           ref={gridRef}
@@ -588,6 +617,8 @@ function TradeGridInner({ trades, quickFilterText, selectedTradeId, onRowDoubleC
           headerHeight={36}
           getRowId={(params) => params.data?.internalTradeId ?? `row-${params.rowIndex}`}
           rowClassRules={rowClassRules}
+          tooltipShowDelay={0}
+          tooltipHideDelay={5000}
         />
       </div>
 

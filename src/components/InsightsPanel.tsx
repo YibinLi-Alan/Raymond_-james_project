@@ -1,5 +1,7 @@
 import { useMemo } from 'react';
 import { Trade } from '../types/trade';
+import { useBlotterStore } from '../store/useBlotterStore';
+import type { FrequencyAnomaly, SizeAnomaly } from '../api/client';
 
 interface InsightsPanelProps {
   trades: Trade[];
@@ -28,6 +30,20 @@ interface RankedItem {
 
 export function InsightsPanel({ trades, tradeCount: _tradeCount, totalNotional }: InsightsPanelProps) {
   void _tradeCount;
+
+  const sizeAnomalyIds = useBlotterStore((s) => s.sizeAnomalyIds);
+  const sizeAnomalyDetails = useBlotterStore((s) => s.sizeAnomalyDetails);
+  const anomalyDayPercentile = useBlotterStore((s) => s.anomalyDayPercentile);
+  const frequencyAnomalies = useBlotterStore((s) => s.frequencyAnomalies);
+  const sizeAnomalyMap = useMemo(
+    () => new Map<string, SizeAnomaly>(sizeAnomalyDetails.map((a) => [a.tradeId, a])),
+    [sizeAnomalyDetails]
+  );
+  const frequencyAnomalyMap = useMemo(
+    () => new Map<string, FrequencyAnomaly>(frequencyAnomalies.map((a) => [a.counterpartyName, a])),
+    [frequencyAnomalies]
+  );
+  const sizeAnomalyIdSet = useMemo(() => new Set(sizeAnomalyIds), [sizeAnomalyIds]);
 
   const insights = useMemo(() => {
     if (trades.length === 0) {
@@ -245,6 +261,13 @@ export function InsightsPanel({ trades, tradeCount: _tradeCount, totalNotional }
 
   return (
     <div className="insights-panel">
+      {/* High-volume day warning banner */}
+      {anomalyDayPercentile !== null && anomalyDayPercentile >= 95 && (
+        <div className="insights-volume-banner">
+          ⚠ Today is {Math.round(anomalyDayPercentile)}th percentile volume day
+        </div>
+      )}
+
       {/* Summary metrics */}
       <div className="insights-summary">
         <div className="insights-summary-metrics">
@@ -279,6 +302,19 @@ export function InsightsPanel({ trades, tradeCount: _tradeCount, totalNotional }
         </div>
       </div>
 
+      {sizeAnomalyIds.length > 0 && (
+        <div className="insights-anomaly-legend">
+          <span className="insights-anomaly-badge" style={{marginRight: '6px'}}>!</span>
+          indicates a statistical size anomaly (more than 2σ from counterparty mean)
+        </div>
+      )}
+      {frequencyAnomalies.length > 0 && (
+        <div className="insights-anomaly-legend" style={{borderLeftColor: '#3b82f6', background: 'rgba(59, 130, 246, 0.08)'}}>
+          <span className="insights-freq-badge" style={{marginRight: '6px', fontSize: '10px'}}>📈</span>
+          indicates unusual counterparty trading frequency (more than 1.5σ from daily average)
+        </div>
+      )}
+
       {/* Scrollable sections - single column for narrow panel */}
       <div className="insights-sections">
         {sections.map(({ title, items, key, isTrades }) => (
@@ -289,7 +325,18 @@ export function InsightsPanel({ trades, tradeCount: _tradeCount, totalNotional }
                 isTrades ? (
                   <div key={(item as RankedItem & { tradeId?: string }).tradeId} className="insights-row">
                     <span className="insights-rank">{idx + 1}</span>
-                    <span className="insights-name">{(item as RankedItem & { tradeId?: string }).name}</span>
+                    <span className="insights-name">
+                      {(item as RankedItem & { tradeId?: string }).name}
+                      {(item as RankedItem & { tradeId?: string }).tradeId &&
+                        sizeAnomalyIdSet.has((item as RankedItem & { tradeId?: string }).tradeId!) && (() => {
+                          const tradeId = (item as RankedItem & { tradeId?: string }).tradeId!;
+                          const a = sizeAnomalyMap.get(tradeId);
+                          const tip = a
+                            ? `Size anomaly: ${formatCurrency(a.notionalUsd)} is ${Math.abs(a.zScore).toFixed(1)}σ ${a.direction === 'HIGH' ? 'above' : 'below'} ${a.counterpartyName}'s historical mean (${formatCurrency(a.cpMeanNotionalUsd)}). This trade is in the top 2% of all trades by size.`
+                            : 'Size anomaly: notional deviates more than 2 standard deviations from this counterparty\'s historical mean.';
+                          return <span className="insights-anomaly-badge" title={tip}>!</span>;
+                        })()}
+                    </span>
                     <span className={`insights-pct ${(item as RankedItem).isUp ? 'up' : 'down'}`}>
                       {formatPctDiff((item as RankedItem).pctDiff)}
                     </span>
@@ -298,7 +345,23 @@ export function InsightsPanel({ trades, tradeCount: _tradeCount, totalNotional }
                 ) : (
                   <div key={(item as RankedItem).name} className="insights-row">
                     <span className="insights-rank">{idx + 1}</span>
-                    <span className="insights-name">{(item as RankedItem).name}</span>
+                    <span className="insights-name">
+                      {(item as RankedItem).name}
+                      {key === 'cp' && (() => {
+                        const fa = frequencyAnomalyMap.get((item as RankedItem).name);
+                        if (!fa) return null;
+                        const symbol = fa.direction === 'HIGH' ? '📈' : fa.direction === 'SILENT' ? '🔇' : '📉';
+                        const tooltip =
+                          fa.direction === 'HIGH'
+                            ? `Frequency anomaly: trading ${fa.todayCount} trades today vs ${fa.historicalDailyAvg} daily average`
+                            : fa.direction === 'SILENT'
+                            ? `Frequency anomaly: no trades today (normally ${fa.historicalDailyAvg} per day)`
+                            : `Frequency anomaly: only ${fa.todayCount} trades today vs ${fa.historicalDailyAvg} daily average`;
+                        return (
+                          <span className="insights-freq-badge" title={tooltip}>{symbol}</span>
+                        );
+                      })()}
+                    </span>
                     <span className={`insights-pct ${(item as RankedItem).isUp ? 'up' : 'down'}`}>
                       {formatPctDiff((item as RankedItem).pctDiff)}
                     </span>

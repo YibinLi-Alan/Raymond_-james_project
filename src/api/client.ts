@@ -70,6 +70,49 @@ export async function aiQuery(
   return res.json();
 }
 
+// ---------------------------------------------------------------------------
+// Anomaly Detection API
+// ---------------------------------------------------------------------------
+
+export interface SizeAnomaly {
+  tradeId: string;
+  counterpartyName: string;
+  zScore: number;
+  direction: 'HIGH' | 'LOW';
+  notionalUsd: number;
+  cpMeanNotionalUsd: number;
+  sampleSize: number;
+}
+
+export interface FrequencyAnomaly {
+  counterpartyName: string;
+  direction: 'HIGH' | 'LOW' | 'SILENT';
+  zScore: number | null;
+  todayCount: number;
+  historicalDailyAvg: number;
+  sampleDays: number;
+  lowConfidence: boolean;
+}
+
+export interface AnomalyResponse {
+  sizeAnomalies: SizeAnomaly[];
+  frequencyAnomalies: FrequencyAnomaly[];
+  dayPercentile: number;
+  computedAt: string;
+  counts: { size: number; frequency: number };
+}
+
+export async function fetchAnomalies(): Promise<AnomalyResponse> {
+  const res = await fetch(`${API_BASE}/api/anomalies`, {
+    method: 'GET',
+    headers: { Accept: 'application/json' },
+  });
+  if (!res.ok) {
+    throw new Error(`Anomalies API error: ${res.status} ${res.statusText}`);
+  }
+  return res.json() as Promise<AnomalyResponse>;
+}
+
 export interface AIChatContextSnapshot {
   data: Record<string, unknown>[];
   sql?: string;

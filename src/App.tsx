@@ -6,7 +6,7 @@ import { ColumnsButton } from './components/ColumnsButton';
 import { BClassFilter } from './components/BClassSunburstChart';
 import { mockDatabase } from './data/relationalMockData';
 import { DatabaseProvider } from './contexts/DatabaseContext';
-import { fetchTrades } from './api/client';
+import { fetchTrades, fetchAnomalies } from './api/client';
 import { getIntradayDataForTrade } from './data/evalPriceGenerator';
 import { Trade, IntradayData } from './types/trade';
 import { useBlotterStore } from './store/useBlotterStore';
@@ -19,6 +19,19 @@ interface ChartSelection {
 }
 
 function App() {
+  // Store must be destructured first — dependency arrays in useEffects below
+  // reference these values synchronously during render (temporal dead zone fix).
+  const {
+    quickFilterText,
+    setQuickFilterText,
+    resetToDefaults,
+    selectedTradeId: storeSelectedTradeId,
+    setSelectedTradeId,
+    aiQueryResult,
+    setAnomalyState,
+    setAnomalyLoading,
+  } = useBlotterStore();
+
   // Clear saved layout on first load to ensure 2x2 grid is applied
   useEffect(() => {
     localStorage.removeItem('dockview-layout');
@@ -33,12 +46,30 @@ function App() {
       .then((data) => {
         setTrades(data);
         setDataSource('sqlite');
+        // Fetch anomalies in parallel — a failure must not affect the dashboard
+        setAnomalyLoading(true);
+        fetchAnomalies()
+          .then((result) => {
+            setAnomalyState({
+              sizeAnomalyIds: result.sizeAnomalies.map((a) => a.tradeId),
+              sizeAnomalyDetails: result.sizeAnomalies,
+              frequencyAnomalies: result.frequencyAnomalies,
+              dayPercentile: result.dayPercentile,
+              lastComputedAt: result.computedAt,
+            });
+          })
+          .catch((err) => {
+            console.warn('[Anomaly] fetch failed, continuing without anomaly data:', err);
+          })
+          .finally(() => {
+            setAnomalyLoading(false);
+          });
       })
       .catch(() => {
         setTrades(mockDatabase.getAllTradesJoined());
         setDataSource('mock');
       });
-  }, []);
+  }, [setAnomalyLoading, setAnomalyState]);
 
   // Trade source for context: API-backed list or in-memory db
   const db = useMemo(() => {
@@ -63,16 +94,6 @@ function App() {
 
   // Intraday chart data (derived from selected trade in store)
   const [intradayData, setIntradayData] = useState<IntradayData | null>(null);
-
-  // Get state from Zustand store (including AI query result for full-dashboard linkage)
-  const {
-    quickFilterText,
-    setQuickFilterText,
-    resetToDefaults,
-    selectedTradeId: storeSelectedTradeId,
-    setSelectedTradeId,
-    aiQueryResult,
-  } = useBlotterStore();
 
   // Filter trades based on selected chart point and BCLASS filter
   const filteredTrades = useMemo(() => {

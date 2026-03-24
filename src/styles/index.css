@@ -554,7 +554,7 @@ body {
   background-color: transparent !important;
 }
 
-/* Anomaly row highlight (AI-detected outliers) */
+/* Anomaly row highlight (AI-detected outliers) — red */
 .ag-theme-alpine-dark .anomaly-trade-row {
   background-color: rgba(207, 102, 121, 0.2) !important;
   border-left: 3px solid var(--accent-error) !important;
@@ -562,6 +562,74 @@ body {
 
 .ag-theme-alpine-dark .anomaly-trade-row .ag-cell {
   background-color: transparent !important;
+}
+
+/* Size anomaly row highlight (statistical notional outlier) — amber */
+.ag-theme-alpine-dark .size-anomaly-row {
+  background-color: rgba(251, 191, 36, 0.12) !important;
+  border-left: 3px solid #f59e0b !important;
+}
+
+.ag-theme-alpine-dark .size-anomaly-row .ag-cell {
+  background-color: transparent !important;
+}
+
+/* InsightsPanel: high-volume day banner */
+.insights-volume-banner {
+  padding: 7px 12px;
+  margin: 0;
+  background-color: rgba(245, 158, 11, 0.18);
+  border-bottom: 1px solid rgba(245, 158, 11, 0.45);
+  color: #fbbf24;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  flex-shrink: 0;
+}
+
+/* InsightsPanel: size anomaly badge on trade name */
+.insights-anomaly-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 5px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background-color: #f59e0b;
+  color: #1a1a1a;
+  font-size: 0.6rem;
+  font-weight: 800;
+  line-height: 1;
+  vertical-align: middle;
+  cursor: default;
+  flex-shrink: 0;
+}
+
+.insights-freq-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 5px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background-color: #3b82f6;
+  font-size: 0.65rem;
+  line-height: 1;
+  vertical-align: middle;
+  cursor: default;
+  flex-shrink: 0;
+}
+
+.insights-anomaly-legend {
+  font-size: 11px;
+  color: var(--color-text-secondary, #9ca3af);
+  padding: 4px 8px;
+  border-left: 3px solid #f59e0b;
+  margin-bottom: 8px;
+  background: rgba(245, 158, 11, 0.08);
+  border-radius: 0 4px 4px 0;
 }
 
 /* Scrollbar Styling */
