@@ -8,6 +8,7 @@ import { YieldCurveScatterPanel } from './YieldCurveScatterPanel';
 import { AIAssistant } from './AIAssistant';
 import { AIDataTablePanel } from './AIDataTablePanel';
 import { AIGraphPanel } from './AIGraphPanel';
+import { AnomaliesPanel } from './AnomaliesPanel';
 
 export type PanelId =
   | 'insights'
@@ -18,7 +19,8 @@ export type PanelId =
   | 'yieldCurve'
   | 'aiAssistant'
   | 'aiDataTable'
-  | 'aiGraphPanel';
+  | 'aiGraphPanel'
+  | 'anomalies';
 
 export interface PanelParams {
   trades?: Trade[];
@@ -91,6 +93,8 @@ export function PanelContent({ panelId, params }: PanelContentProps) {
       return <AIDataTablePanel />;
     case 'aiGraphPanel':
       return <AIGraphPanel />;
+    case 'anomalies':
+      return <AnomaliesPanel trades={trades} />;
     default:
       return null;
   }

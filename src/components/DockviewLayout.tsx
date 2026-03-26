@@ -17,6 +17,7 @@ const ALL_PANEL_IDS = [
   'aiAssistant',
   'aiDataTable',
   'aiGraphPanel',
+  'anomalies',
 ] as const;
 
 interface PanelDefinition {
@@ -49,6 +50,7 @@ const PANEL_DEFINITIONS: PanelDefinition[] = [
   { id: 'aiAssistant', title: 'AI Assistant', component: 'aiAssistant' },
   { id: 'aiDataTable', title: 'AI Data Table', component: 'aiDataTable' },
   { id: 'aiGraphPanel', title: 'AI Graph', component: 'aiGraphPanel' },
+  { id: 'anomalies', title: 'Anomalies', component: 'anomalies' },
 ];
 
 interface DockviewLayoutProps {
@@ -128,6 +130,8 @@ export function DockviewLayout({
           return { trades: displayTrades };
         case 'aiAssistant':
           return {};
+        case 'anomalies':
+          return { trades: displayTrades };
         default:
           return {};
       }
@@ -221,6 +225,7 @@ export function DockviewLayout({
   const showAiDataTable = visiblePanelIds.includes('aiDataTable');
   const showInsights = visiblePanelIds.includes('insights');
   const showGrid = visiblePanelIds.includes('grid');
+  const showAnomalies = visiblePanelIds.includes('anomalies');
   const CHART_IDS = ['aiGraphPanel', 'sunburstChart', 'treemapChart', 'intradayChart', 'yieldCurve'];
   // Only show chart overlay when activeChartPanel is valid and still in layout
   const hasChartOverlay = Boolean(
@@ -228,7 +233,7 @@ export function DockviewLayout({
     visiblePanelIds.includes(activeChartPanel) &&
     CHART_IDS.includes(activeChartPanel)
   );
-  const showMiddleContent = showAiDataTable || showGrid;
+  const showMiddleContent = showAiDataTable || showGrid || showAnomalies;
 
   // Resizable left slot width (25% default, user can drag sash)
   const [leftWidthPercent, setLeftWidthPercent] = useState(25);
@@ -300,6 +305,8 @@ export function DockviewLayout({
                 <div className="dockview-panel-content slot-panel">
                   {showGrid ? (
                     renderPanelContent('grid')
+                  ) : showAnomalies ? (
+                    renderPanelContent('anomalies')
                   ) : showAiDataTable ? (
                     <AIDataTablePanel />
                   ) : null}

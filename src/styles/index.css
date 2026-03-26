@@ -632,6 +632,313 @@ body {
   border-radius: 0 4px 4px 0;
 }
 
+/* ========== Anomalies Panel ========== */
+.anomalies-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 12px;
+  overflow: hidden;
+  background: var(--bg-primary, #1a1a2e);
+  gap: 8px;
+  font-size: 12px;
+  color: #e0e0e0;
+}
+.anomalies-panel--loading,
+.anomalies-panel--empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: #888;
+  font-size: 13px;
+}
+
+/* Header */
+.anomalies-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+}
+.anomalies-header-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.anomalies-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: #f0f0f0;
+}
+.anomalies-volume-tag {
+  background: rgba(245, 158, 11, 0.15);
+  color: #f59e0b;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+}
+.anomalies-header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.anomalies-timestamp {
+  color: #666;
+  font-size: 10px;
+}
+.anomalies-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: #aaa;
+  cursor: pointer;
+  user-select: none;
+}
+.anomalies-toggle input {
+  accent-color: #f59e0b;
+}
+
+/* Methodology */
+.anomalies-methodology {
+  flex-shrink: 0;
+}
+.anomalies-methodology-toggle {
+  background: none;
+  border: none;
+  color: #888;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 2px 0;
+  font-family: inherit;
+}
+.anomalies-methodology-toggle:hover {
+  color: #ccc;
+}
+.anomalies-methodology-body {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid #333;
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin-top: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.anomalies-methodology-section strong {
+  font-size: 11px;
+  color: #ccc;
+}
+.anomalies-methodology-section p {
+  margin: 2px 0 0;
+  font-size: 11px;
+  color: #888;
+  line-height: 1.5;
+}
+
+/* Charts */
+.anomalies-charts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  flex-shrink: 0;
+  height: 200px;
+  min-height: 160px;
+}
+.anomalies-chart-cell {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid #2a2a3e;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+/* Summary bar */
+.anomalies-summary-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.anomalies-count-badge {
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.anomalies-count-badge--size {
+  background: rgba(245, 158, 11, 0.15);
+  color: #f59e0b;
+}
+.anomalies-count-badge--freq {
+  background: rgba(59, 130, 246, 0.15);
+  color: #3b82f6;
+}
+.anomalies-date-label {
+  color: #666;
+  font-size: 10px;
+  margin-left: auto;
+}
+
+/* Tabs */
+.anomalies-tabs {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.anomalies-tab {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid #333;
+  border-bottom: none;
+  border-radius: 4px 4px 0 0;
+  padding: 4px 14px;
+  font-size: 11px;
+  color: #888;
+  cursor: pointer;
+  font-family: inherit;
+}
+.anomalies-tab:hover {
+  color: #ccc;
+  background: rgba(255, 255, 255, 0.06);
+}
+.anomalies-tab--active {
+  color: #f0f0f0;
+  background: rgba(255, 255, 255, 0.08);
+  border-color: #555;
+}
+
+/* Table */
+.anomalies-table-wrapper {
+  flex: 1;
+  overflow-y: auto;
+  border: 1px solid #2a2a3e;
+  border-radius: 6px;
+  min-height: 0;
+}
+.anomalies-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+.anomalies-table thead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.anomalies-table th {
+  background: #1e1e2e;
+  color: #999;
+  font-weight: 600;
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid #333;
+  white-space: nowrap;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.anomalies-th-sortable {
+  cursor: pointer;
+  user-select: none;
+}
+.anomalies-th-sortable:hover {
+  color: #e0e0e0;
+}
+.anomalies-table td {
+  padding: 5px 8px;
+  border-bottom: 1px solid #222;
+  white-space: nowrap;
+}
+.anomalies-table-row:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+.anomalies-table-row--size:hover {
+  background: rgba(245, 158, 11, 0.06);
+}
+.anomalies-table-row--frequency:hover {
+  background: rgba(59, 130, 246, 0.06);
+}
+.anomalies-table-empty {
+  text-align: center;
+  color: #666;
+  padding: 20px !important;
+}
+
+/* Type badge */
+.anomalies-type-badge {
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+}
+.anomalies-type-badge--size {
+  background: rgba(245, 158, 11, 0.15);
+  color: #f59e0b;
+}
+.anomalies-type-badge--frequency {
+  background: rgba(59, 130, 246, 0.15);
+  color: #3b82f6;
+}
+
+/* Cells */
+.anomalies-cell-cp {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.anomalies-cell-date {
+  color: #999;
+  font-variant-numeric: tabular-nums;
+  font-size: 10px;
+}
+.anomalies-cell-id {
+  color: #888;
+  font-family: monospace;
+  font-size: 10px;
+}
+.anomalies-cell-notional {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.anomalies-cell-zscore {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.anomalies-cell-detail {
+  color: #777;
+  font-size: 10px;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Z-score colors */
+.anomalies-zscore--high { color: #ef4444; }
+.anomalies-zscore--low { color: #3b82f6; }
+.anomalies-zscore--silent { color: #888; }
+
+/* Direction badges */
+.anomalies-direction {
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+}
+.anomalies-direction--high {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+}
+.anomalies-direction--low {
+  background: rgba(59, 130, 246, 0.15);
+  color: #3b82f6;
+}
+.anomalies-direction--silent {
+  background: rgba(136, 136, 136, 0.15);
+  color: #888;
+}
+
 /* Scrollbar Styling */
 ::-webkit-scrollbar {
   width: 8px;

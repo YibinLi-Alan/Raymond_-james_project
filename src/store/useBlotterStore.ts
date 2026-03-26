@@ -368,13 +368,10 @@ export const useBlotterStore = create<BlotterState>()(
           set({ visiblePanelIds: next, activeChartPanel: null });
           return;
         }
-        next = next.filter(
-          (id) =>
-            !(
-              (panelId === 'grid' && id === 'aiDataTable') ||
-              (panelId === 'aiDataTable' && id === 'grid')
-            )
-        );
+        const MIDDLE_SLOT_IDS = ['grid', 'aiDataTable', 'anomalies'];
+        if (MIDDLE_SLOT_IDS.includes(panelId)) {
+          next = next.filter((id) => !MIDDLE_SLOT_IDS.includes(id) || id === panelId);
+        }
         if (next.length >= MAX_PANELS) return;
         set({
           visiblePanelIds: [...next, panelId],
