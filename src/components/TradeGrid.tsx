@@ -448,7 +448,7 @@ function TradeGridInner({ trades, quickFilterText, selectedTradeId, onRowDoubleC
   const onGridReady = useCallback((params: GridReadyEvent) => {
     gridApiRef.current = params.api;
     const data = Array.isArray(tradesRef.current) ? tradesRef.current : [];
-    params.api.setRowData(data);
+    params.api.setGridOption('rowData', data);
   }, []);
 
   // Keep grid in sync when trades prop changes (e.g. AI query result → displayTrades)
@@ -457,7 +457,7 @@ function TradeGridInner({ trades, quickFilterText, selectedTradeId, onRowDoubleC
     if (api) {
       try {
         const data = Array.isArray(trades) ? trades : [];
-        api.setRowData(data);
+        api.setGridOption('rowData', data);
       } catch (_) {
         // Guard against grid not ready or API transition
       }
@@ -586,7 +586,7 @@ function TradeGridInner({ trades, quickFilterText, selectedTradeId, onRowDoubleC
           domLayout="normal"
           rowHeight={32}
           headerHeight={36}
-          getRowId={(params) => params.data?.internalTradeId ?? `row-${params.rowIndex}`}
+          getRowId={(params) => params.data?.internalTradeId ?? 'row-missing-id'}
           rowClassRules={rowClassRules}
         />
       </div>

@@ -7,18 +7,6 @@ import { AIAssistant } from './AIAssistant';
 import { AIDataTablePanel } from './AIDataTablePanel';
 import { PanelContent, type PanelId, type PanelParams } from './PanelContent';
 
-const ALL_PANEL_IDS = [
-  'insights',
-  'sunburstChart',
-  'treemapChart',
-  'grid',
-  'intradayChart',
-  'yieldCurve',
-  'aiAssistant',
-  'aiDataTable',
-  'aiGraphPanel',
-] as const;
-
 interface PanelDefinition {
   id: string;
   title: string;
@@ -55,7 +43,6 @@ interface DockviewLayoutProps {
   trades: Trade[];
   filteredTrades: Trade[];
   displayTrades: Trade[];
-  isAIResult?: boolean;
   quickFilterText: string;
   tradeCount: number;
   totalNotional: number;
@@ -75,7 +62,6 @@ export function DockviewLayout({
   trades: allTrades,
   filteredTrades: _filteredTrades,
   displayTrades,
-  isAIResult = false,
   quickFilterText,
   tradeCount,
   totalNotional,

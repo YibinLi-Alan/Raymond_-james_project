@@ -78,12 +78,18 @@ export interface AIChatContextSnapshot {
 export async function aiChat(
   message: string,
   history?: { role: string; content: string }[],
-  contextSnapshot?: AIChatContextSnapshot | null
+  contextSnapshot?: AIChatContextSnapshot | null,
+  responseStyle?: 'short' | 'detailed'
 ): Promise<AIChatResponse> {
   const res = await fetch(`${API_BASE}/api/ai/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify({ message, history, context_snapshot: contextSnapshot ?? undefined }),
+    body: JSON.stringify({
+      message,
+      history,
+      context_snapshot: contextSnapshot ?? undefined,
+      response_style: responseStyle ?? 'detailed',
+    }),
   });
   if (!res.ok) {
     const detail = (await res.json().catch(() => ({}))).detail ?? res.statusText;

@@ -1,4 +1,5 @@
 import { useState, useCallback, useMemo, ReactNode } from 'react';
+import { useEffect } from 'react';
 import { useBlotterStore } from '../store/useBlotterStore';
 import { SavedViewsDropdown } from './SavedViewsDropdown';
 import { BClassFilter } from './BClassSunburstChart';
@@ -65,6 +66,19 @@ export function ControlBar({
 }: ControlBarProps) {
   const { quickFilterText, setQuickFilterText, dateRange, setDateRange, chartDateFilter } = useBlotterStore();
   const [selectedRange, setSelectedRange] = useState(dateRange.preset);
+  const [todayKey, setTodayKey] = useState(() => new Date().toDateString());
+
+  useEffect(() => {
+    setSelectedRange(dateRange.preset);
+  }, [dateRange.preset]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const nextKey = new Date().toDateString();
+      setTodayKey((current) => (current === nextKey ? current : nextKey));
+    }, 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   // Calculate date labels for dropdown
   const dateLabels = useMemo(() => {
@@ -79,7 +93,7 @@ export function ControlBar({
       last30: `${formatShortDate(last30Start)} - ${formatShortDate(yesterday)}`,
       mtd: `${formatShortDate(mtdStart)} - ${formatShortDate(yesterday)}`,
     };
-  }, []);
+  }, [todayKey]);
 
   const handleFilterChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value;
