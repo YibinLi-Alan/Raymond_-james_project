@@ -57,7 +57,6 @@ interface DockviewLayoutProps {
   trades: Trade[];
   filteredTrades: Trade[];
   displayTrades: Trade[];
-  isAIResult?: boolean;
   quickFilterText: string;
   tradeCount: number;
   totalNotional: number;
@@ -77,7 +76,6 @@ export function DockviewLayout({
   trades: allTrades,
   filteredTrades: _filteredTrades,
   displayTrades,
-  isAIResult = false,
   quickFilterText,
   tradeCount,
   totalNotional,

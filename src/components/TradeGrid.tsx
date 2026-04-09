@@ -615,7 +615,7 @@ function TradeGridInner({ trades, quickFilterText, selectedTradeId, onRowDoubleC
           domLayout="normal"
           rowHeight={32}
           headerHeight={36}
-          getRowId={(params) => params.data?.internalTradeId ?? `row-${params.rowIndex}`}
+          getRowId={(params) => params.data?.internalTradeId ?? 'row-missing-id'}
           rowClassRules={rowClassRules}
           tooltipShowDelay={0}
           tooltipHideDelay={5000}

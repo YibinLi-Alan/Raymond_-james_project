@@ -5,6 +5,7 @@ import type { AIQueryResponse } from '../api/client';
 import type { Trade } from '../types/trade';
 
 type AIMode = 'data' | 'chat';
+type ChatResponseStyle = 'short' | 'detailed';
 
 interface Message {
   id: string;
@@ -13,16 +14,84 @@ interface Message {
   sql?: string;
   data?: Record<string, unknown>[];
   error?: string;
+  explanationPrompt?: string;
+  explanationStyle?: ChatResponseStyle;
+  explanationResponseFor?: string;
 }
 
 const API_BASE = typeof import.meta !== 'undefined' && (import.meta as unknown as { env?: { VITE_API_BASE_URL?: string } }).env?.VITE_API_BASE_URL
   ? (import.meta as unknown as { env: { VITE_API_BASE_URL: string } }).env.VITE_API_BASE_URL
   : 'http://localhost:8000';
 
+const DATA_QUERY_SUGGESTIONS = [
+  'What were the most traded securities today?',
+  'Which traders executed the most trades today?',
+  'What sectors had the most trading activity today?',
+  'Which securities had unusual trading volume today?',
+  'Did any traders change their trading behavior today?',
+  'Which trades were outliers today?',
+  'Which counterparty had the highest activity today?',
+  'Show the largest trades today',
+  'Compare today\'s trading volume to yesterday',
+  'Show top traders by notional',
+  'Which sectors were most active today?',
+  'Which securities were traded the most today?',
+  'Show unusual trading activity today',
+  'What unusual patterns occurred today?',
+  'Show total notional by product',
+  'Show trade count by sector',
+  'Compare today\'s volume to the historical average',
+  'Show trader behavior changes today',
+];
+
+const GENERAL_CHAT_SUGGESTIONS = [
+  'Explain today\'s trading activity',
+  'Summarize the most active sectors today',
+  'What unusual patterns occurred today?',
+  'Explain the most traded securities today and show a graph',
+  'Explain which traders were most active today',
+  'Summarize the biggest trades today',
+  'Explain unusual trading volume today',
+  'Explain trader behavior changes today',
+  'Summarize counterparty activity today',
+  'Explain today versus yesterday trading volume',
+  'Explain the top sectors and show a graph',
+  'Explain the outlier trades today',
+];
+
+function shuffleItems<T>(items: T[]): T[] {
+  const copy = [...items];
+  for (let i = copy.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy;
+}
+
+function pickSuggestions(pool: string[], storageKey: string, count = 3): string[] {
+  const shuffled = shuffleItems(pool);
+  const previous = typeof window !== 'undefined'
+    ? JSON.parse(window.sessionStorage.getItem(storageKey) ?? '[]') as string[]
+    : [];
+
+  let next = shuffled.filter((item) => !previous.includes(item)).slice(0, count);
+  if (next.length < count) {
+    const fallback = shuffled.filter((item) => !next.includes(item)).slice(0, count - next.length);
+    next = [...next, ...fallback];
+  }
+
+  if (typeof window !== 'undefined') {
+    window.sessionStorage.setItem(storageKey, JSON.stringify(next));
+  }
+  return next;
+}
+
 export function AIAssistant() {
   const [mode, setMode] = useState<AIMode>('data');
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<Message[]>([]);
+  const [dataSuggestions, setDataSuggestions] = useState<string[]>([]);
+  const [chatSuggestions, setChatSuggestions] = useState<string[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -35,7 +104,6 @@ export function AIAssistant() {
     getGridFilterContext,
     visiblePanelIds,
     openPanel,
-    setActiveChartPanel,
     isAILoading,
     lastAiQueryResult,
   } = useBlotterStore();
@@ -48,12 +116,87 @@ export function AIAssistant() {
     scrollToBottom();
   }, [messages, scrollToBottom]);
 
+  useEffect(() => {
+    setDataSuggestions(pickSuggestions(DATA_QUERY_SUGGESTIONS, 'ai-data-suggestions'));
+    setChatSuggestions(pickSuggestions(GENERAL_CHAT_SUGGESTIONS, 'ai-chat-suggestions'));
+  }, []);
+
   const addMessage = useCallback((msg: Omit<Message, 'id'>) => {
     setMessages((prev) => [...prev, { ...msg, id: `msg-${Date.now()}-${Math.random().toString(36).slice(2)}` }]);
   }, []);
 
-  const handleSend = useCallback(async () => {
-    const text = input.trim();
+  const runChatExplanation = useCallback(async (text: string, style: ChatResponseStyle) => {
+    setAILoading(true);
+    try {
+      const history = messages
+        .filter((m) => m.role === 'user' || m.role === 'assistant')
+        .slice(-10)
+        .map((m) => ({ role: m.role, content: m.content }));
+      const contextSnapshot =
+        lastAiQueryResult?.data?.length
+          ? { data: lastAiQueryResult.data, sql: lastAiQueryResult.sql }
+          : null;
+      const { answer, chartOption, data: chatData, sql: chatSql } = await aiChat(
+        text,
+        history,
+        contextSnapshot,
+        style
+      );
+      setMessages((prev) => {
+        const filtered = prev.filter(
+          (m) => !(m.role === 'assistant' && m.explanationResponseFor === text)
+        );
+        return filtered.map((m) =>
+          m.role === 'assistant' && m.explanationPrompt === text
+            ? { ...m, explanationStyle: style }
+            : m
+        ).concat({
+          id: `msg-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          role: 'assistant',
+          content: answer,
+          explanationResponseFor: text,
+        });
+      });
+      if (chatData) {
+        const result = {
+          data: chatData,
+          trades: undefined,
+          sql: undefined,
+          chartOption: chartOption ?? null,
+          aiSummary: null,
+          anomalyTradeIds: [],
+          error: null,
+        };
+        setAIQueryResult(result);
+        setLastAiQueryResult({ data: chatData, sql: chatSql });
+        openPanel('aiDataTable');
+      }
+      if (chartOption) {
+        setAIChartOption(chartOption);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      addMessage({
+        role: 'assistant',
+        content: `Error: ${message}. Ensure the backend is running at ${API_BASE} and backend/bedrock_credentials.env is configured with AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION, and BEDROCK_MODEL_ID.`,
+        error: message,
+      });
+    } finally {
+      setAILoading(false);
+    }
+  }, [
+    messages,
+    lastAiQueryResult,
+    addMessage,
+    setAILoading,
+    setAIQueryResult,
+    setLastAiQueryResult,
+    openPanel,
+    setAIChartOption,
+  ]);
+
+  const handleSend = useCallback(async (prefilledText?: string) => {
+    const text = (prefilledText ?? input).trim();
     if (!text) return;
 
     setInput('');
@@ -105,13 +248,15 @@ export function AIAssistant() {
             error: res.error,
           });
         } else {
-          const dataPreview = res.data?.length
-            ? `Returned ${res.data.length} row(s).`
-            : 'No rows returned.';
-          let content = res.aiSummary
-            ? `${res.aiSummary}\n\n${dataPreview}`
-            : dataPreview;
-          if (res.sql) content += `\n\n\`\`\`sql\n${res.sql}\n\`\`\``;
+          const rowCount = res.data?.length ?? 0;
+          const hasGraph = !!res.chartOption;
+          let content = hasGraph
+            ? `Total Trades: ${rowCount}\nGraph created from the current table.`
+            : `Total Trades: ${rowCount}`;
+          if (res.aiSummary && hasGraph) {
+            content += `\n\n${res.aiSummary}`;
+          }
+          if (res.sql) content += `\n\nSQL used:\n\`\`\`sql\n${res.sql}\n\`\`\``;
 
           addMessage({
             role: 'assistant',
@@ -134,52 +279,22 @@ export function AIAssistant() {
           openPanel('aiDataTable');
           if (res.chartOption) {
             setAIChartOption(res.chartOption);
-            openPanel('aiGraphPanel');
-            setActiveChartPanel('aiGraphPanel');
           } else {
             setAIChartOption(null);
           }
         }
       } else {
-        const history = messages
-          .filter((m) => m.role === 'user' || m.role === 'assistant')
-          .slice(-10)
-          .map((m) => ({ role: m.role, content: m.content }));
-        const contextSnapshot =
-          lastAiQueryResult?.data?.length
-            ? { data: lastAiQueryResult.data, sql: lastAiQueryResult.sql }
-            : null;
-        const { answer, chartOption, data: chatData, sql: chatSql } = await aiChat(
-          text,
-          history,
-          contextSnapshot
-        );
-        addMessage({ role: 'assistant', content: answer });
-        if (chatData) {
-          const result = {
-            data: chatData,
-            trades: undefined,
-            sql: chatSql ?? undefined,
-            chartOption: chartOption ?? null,
-            aiSummary: null,
-            anomalyTradeIds: [],
-            error: null,
-          };
-          setAIQueryResult(result);
-          setLastAiQueryResult({ data: chatData, sql: chatSql });
-          openPanel('aiDataTable');
-        }
-        if (chartOption) {
-          setAIChartOption(chartOption);
-          openPanel('aiGraphPanel');
-          setActiveChartPanel('aiGraphPanel');
-        }
+        addMessage({
+          role: 'assistant',
+          content: 'Choose how you want this explained.',
+          explanationPrompt: text,
+        });
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       addMessage({
         role: 'assistant',
-        content: `Error: ${message}. Ensure the backend is running at ${API_BASE} and OPENAI_API_KEY is set.`,
+        content: `Error: ${message}. Ensure the backend is running at ${API_BASE} and backend/bedrock_credentials.env is configured with AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION, and BEDROCK_MODEL_ID.`,
         error: message,
       });
     } finally {
@@ -196,11 +311,15 @@ export function AIAssistant() {
     setLastAiQueryResult,
     setAIChartOption,
     openPanel,
-    setActiveChartPanel,
     getGridFilterContext,
     visiblePanelIds,
     lastAiQueryResult,
+    runChatExplanation,
   ]);
+
+  const suggestionItems = mode === 'data' ? dataSuggestions : chatSuggestions;
+  const graphTypeOptions = ['Bar Graph', 'Pie Chart', 'Line Chart', 'Doughnut Chart', 'Area Chart', 'Scatter Plot'];
+  const hasVisualizationOptions = mode === 'data' && !!lastAiQueryResult?.data?.length;
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -246,18 +365,54 @@ export function AIAssistant() {
       <div className="ai-assistant-messages">
         {messages.length === 0 && (
           <div className="ai-assistant-placeholder">
-            {mode === 'data'
-              ? 'Ask a question in natural language to query the trade database (e.g. "Show BUY trades for last 7 days", "Total notional by product"). Results can update the grid and chart.'
-              : 'Ask general fixed income questions. The AI uses the schema and context to answer.'}
+            <div className="ai-suggested-queries">
+              {suggestionItems.map((suggestion) => (
+                <button
+                  key={suggestion}
+                  type="button"
+                  className="ai-suggestion-chip"
+                  onClick={() => void handleSend(suggestion)}
+                  disabled={isAILoading}
+                >
+                  {suggestion}
+                </button>
+              ))}
+            </div>
           </div>
         )}
-        {messages.map((msg) => (
+      {messages.map((msg) => (
           <div key={msg.id} className={`ai-message ai-message-${msg.role}`}>
             <div className="ai-message-label">{msg.role === 'user' ? 'You' : 'AI'}</div>
             <div className="ai-message-content">
-              {msg.content.split('\n').map((line, i) => (
-                <p key={i}>{line || '\u00A0'}</p>
-              ))}
+              {msg.content.split('\n').map((line, i) => {
+                const trimmed = line.trim().replace(/\*\*/g, '');
+                const isSectionTitle = /^(Short Explanation|Detailed Explanation|Feedback):?$/i.test(trimmed);
+                return isSectionTitle ? (
+                  <p key={i} className="ai-message-section-title">{trimmed.replace(/:$/, '')}</p>
+                ) : (
+                  <p key={i}>{trimmed || '\u00A0'}</p>
+                );
+              })}
+              {msg.explanationPrompt && (
+                <div className="ai-explanation-options">
+                  <button
+                    type="button"
+                    className={`ai-explanation-btn ${msg.explanationStyle === 'short' ? 'active' : ''}`}
+                    onClick={() => void runChatExplanation(msg.explanationPrompt as string, 'short')}
+                    disabled={isAILoading}
+                  >
+                    Short Explanation
+                  </button>
+                  <button
+                    type="button"
+                    className={`ai-explanation-btn ${msg.explanationStyle === 'detailed' ? 'active' : ''}`}
+                    onClick={() => void runChatExplanation(msg.explanationPrompt as string, 'detailed')}
+                    disabled={isAILoading}
+                  >
+                    Detailed Explanation
+                  </button>
+                </div>
+              )}
               {msg.sql && (
                 <pre className="ai-sql-block">
                   <code>{msg.sql}</code>
@@ -270,6 +425,28 @@ export function AIAssistant() {
         <div ref={messagesEndRef} />
       </div>
 
+      {hasVisualizationOptions ? (
+        <div className="ai-persistent-visualization-panel">
+          <div className="ai-persistent-visualization-header">
+            <span className="ai-persistent-visualization-title">Visualization Options</span>
+            <span className="ai-persistent-visualization-subtitle">Switch graph types for the current table anytime</span>
+          </div>
+          <div className="ai-graph-type-options ai-graph-type-options-persistent">
+            {graphTypeOptions.map((option) => (
+              <button
+                key={option}
+                type="button"
+                className="ai-graph-type-btn"
+                onClick={() => void handleSend(`Show this table as a ${option.toLowerCase()}`)}
+                disabled={isAILoading}
+              >
+                {option}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
       {mode === 'chat' && lastAiQueryResult?.data?.length ? (
         <div className="ai-context-indicator">
           Context: Analyzing last query results
@@ -279,7 +456,7 @@ export function AIAssistant() {
         <textarea
           ref={inputRef}
           className="ai-assistant-input"
-          placeholder={mode === 'data' ? 'Ask a data question...' : 'Ask anything about fixed income...'}
+          placeholder={mode === 'data' ? 'Ask about trading activity, traders, sectors, outliers, or behavior...' : 'Ask for a detailed explanation or insight summary...'}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
@@ -289,7 +466,7 @@ export function AIAssistant() {
         <button
           type="button"
           className="ai-send-btn"
-          onClick={handleSend}
+          onClick={() => void handleSend()}
           disabled={!input.trim() || isAILoading}
         >
           {isAILoading ? '...' : 'Send'}

@@ -8,6 +8,7 @@ from typing import Any, Optional
 
 from backend.vanna_config import is_llm_configured
 from backend.vanna_service import (
+    get_supported_query_intents,
     train_vanna,
     text_to_sql_and_run,
     rag_chat,
@@ -29,6 +30,7 @@ class ChatRequest(BaseModel):
     message: str
     history: Optional[list[dict[str, str]]] = None
     context_snapshot: Optional[dict[str, Any]] = None  # { data: [...], sql?: str } from last Data Query
+    response_style: Optional[str] = "detailed"
 
 
 # Snake to camel for trade-like rows (partial mapping)
@@ -130,6 +132,12 @@ def api_train():
     return {"status": "ok", "message": msg}
 
 
+@router.get("/supported")
+def api_supported_queries():
+    """Return the formally supported AI query intents for this dataset."""
+    return {"intents": get_supported_query_intents()}
+
+
 @router.post("/query")
 def api_query(req: QueryRequest):
     """
@@ -160,7 +168,7 @@ def api_chat(req: ChatRequest):
     if not is_llm_configured():
         raise HTTPException(status_code=503, detail="Bedrock not configured. Create backend/bedrock_credentials.env with AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION, BEDROCK_MODEL_ID.")
     answer, chart_option, extra_data, extra_sql = rag_chat(
-        req.message, req.history, req.context_snapshot
+        req.message, req.history, req.context_snapshot, req.response_style
     )
     out = {"answer": answer, "chartOption": chart_option}
     if extra_data is not None:

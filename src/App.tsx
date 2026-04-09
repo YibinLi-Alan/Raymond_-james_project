@@ -125,7 +125,7 @@ function App() {
   // When AI returns trade-like data, all panels use it (including empty []); otherwise use filteredTrades
   const displayTrades = useMemo(() => {
     if (aiQueryResult?.trades != null && Array.isArray(aiQueryResult.trades)) {
-      return aiQueryResult.trades as Trade[];
+      return aiQueryResult.trades as unknown as Trade[];
     }
     return Array.isArray(filteredTrades) ? filteredTrades : [];
   }, [aiQueryResult?.trades, filteredTrades]);
@@ -289,7 +289,6 @@ function App() {
         trades={allTrades}
         filteredTrades={filteredTrades}
         displayTrades={displayTrades}
-        isAIResult={aiQueryResult?.trades != null}
         quickFilterText={quickFilterText}
         tradeCount={tradeCount}
         totalNotional={totalNotional}

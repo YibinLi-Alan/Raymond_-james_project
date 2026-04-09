@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import re
+from functools import lru_cache
 from typing import Any
 
 from backend import vanna_config
@@ -44,8 +45,469 @@ def _bedrock_chat(messages: list[dict], system: str | None = None) -> tuple[str 
         return None, str(e)
 
 
+@lru_cache(maxsize=1)
+def _latest_trade_date() -> str:
+    from backend.db import ensure_db
+
+    ensure_db()
+    conn = sqlite3.connect(vanna_config.SQLITE_PATH)
+    try:
+        row = conn.execute("SELECT MAX(trade_date) FROM trades").fetchone()
+        return str(row[0] or "date('now')")
+    finally:
+        conn.close()
+
+
+def _date_aliases() -> dict[str, str]:
+    latest = _latest_trade_date()
+    return {
+        "__TODAY__": latest,
+        "__YESTERDAY__": f"date('{latest}', '-1 day')",
+        "__LAST_7_DAYS__": f"date('{latest}', '-6 days')",
+        "__LAST_30_DAYS__": f"date('{latest}', '-29 days')",
+    }
+
+
+def _apply_sample_date_aliases(sql: str) -> str:
+    aliases = _date_aliases()
+    for token, value in aliases.items():
+        sql = sql.replace(token, value)
+    sql = re.sub(r"date\('now'\)", f"date('{aliases['__TODAY__']}')", sql, flags=re.IGNORECASE)
+    sql = re.sub(
+        r"date\('now'\s*,\s*'-1 day'\)",
+        aliases["__YESTERDAY__"],
+        sql,
+        flags=re.IGNORECASE,
+    )
+    sql = re.sub(
+        r"date\('now'\s*,\s*'-7 days'\)",
+        f"date('{aliases['__TODAY__']}', '-7 days')",
+        sql,
+        flags=re.IGNORECASE,
+    )
+    return sql
+
+
+UNSUPPORTED_METRIC_MESSAGE = (
+    "This dataset supports trading activity, volume, sector, trader activity, "
+    "and simple anomaly analysis, but it does not currently include realized P&L, "
+    "benchmark prices, VWAP, or slippage fields. I can still help with trade counts, "
+    "notional, volume comparisons, outliers, and behavior changes."
+)
+
+
+SUPPORTED_QUERY_INTENTS: list[dict[str, Any]] = [
+    {
+        "id": "most_traded_securities",
+        "category": "trading_activity",
+        "description": "Most traded securities by trade count, volume, or notional.",
+        "example_prompts": [
+            "What were the most traded securities today?",
+            "Which securities were traded the most today?",
+        ],
+        "keywords": ["most traded securit", "traded the most", "largest securities today"],
+        "supports_chart": True,
+    },
+    {
+        "id": "top_traders_by_activity",
+        "category": "trading_activity",
+        "description": "Traders with the most trades, notional, or trading amount.",
+        "example_prompts": [
+            "Which traders executed the most trades today?",
+            "Show top traders by notional",
+        ],
+        "keywords": ["most trades trader", "executed the most trades", "top traders"],
+        "supports_chart": True,
+    },
+    {
+        "id": "sector_activity",
+        "category": "trading_activity",
+        "description": "Most active sectors or product-sector combinations.",
+        "example_prompts": [
+            "What sectors had the most trading activity today?",
+            "Which sectors were most active?",
+        ],
+        "keywords": ["most activity sector", "sectors had the most trading activity"],
+        "supports_chart": True,
+    },
+    {
+        "id": "counterparty_activity",
+        "category": "trading_activity",
+        "description": "Counterparties ranked by activity, volume, or notional.",
+        "example_prompts": [
+            "Which counterparty had the highest activity today?",
+            "Show counterparty activity",
+        ],
+        "keywords": ["highest activity counterparty", "counterparty activity"],
+        "supports_chart": True,
+    },
+    {
+        "id": "largest_trades",
+        "category": "trading_activity",
+        "description": "Largest trades today or across the available sample.",
+        "example_prompts": [
+            "What were the largest trades today?",
+            "Show the largest trade",
+        ],
+        "keywords": ["largest trades today", "largest trade"],
+        "supports_chart": True,
+    },
+    {
+        "id": "daily_vs_historical_comparison",
+        "category": "trading_activity",
+        "description": "Today's volume compared with yesterday or historical averages.",
+        "example_prompts": [
+            "How did today's trading volume compare to yesterday?",
+            "Compare today's volume to the historical average",
+        ],
+        "keywords": ["compare to yesterday", "historical average", "trading volume compare"],
+        "supports_chart": True,
+    },
+    {
+        "id": "unusual_volume",
+        "category": "anomaly_detection",
+        "description": "Securities with unusual volume versus their own average.",
+        "example_prompts": [
+            "Which securities had unusual trading volume today?",
+            "Show abnormal volume",
+        ],
+        "keywords": ["unusual trading volume", "abnormal volume"],
+        "supports_chart": True,
+    },
+    {
+        "id": "behavior_change",
+        "category": "behavioral_patterns",
+        "description": "Traders whose frequency or ticket size changed versus their baseline.",
+        "example_prompts": [
+            "Did any traders change their trading behavior today?",
+            "Who increased their trading frequency today?",
+        ],
+        "keywords": ["trading behavior", "change their trading patterns", "increased their trading frequency"],
+        "supports_chart": True,
+    },
+    {
+        "id": "trade_outliers",
+        "category": "anomaly_detection",
+        "description": "Trades with large size or price deviation versus their peer baseline.",
+        "example_prompts": [
+            "Which trades were outliers today?",
+            "What unusual patterns occurred today?",
+        ],
+        "keywords": ["which trades were outliers", "unusual trading activity", "unusual patterns", "outlier trade"],
+        "supports_chart": True,
+    },
+    {
+        "id": "unsupported_execution_or_pnl_metrics",
+        "category": "unsupported",
+        "description": "P&L, VWAP, slippage, benchmark-price, and win-rate queries are not supported by the current dataset.",
+        "example_prompts": [
+            "Which trades generated the biggest losses?",
+            "Which trades had the worst execution prices?",
+        ],
+        "keywords": ["p&l", "profit", "loss", "win rate", "vwap", "slippage", "benchmark"],
+        "supports_chart": False,
+    },
+]
+
+
+def get_supported_query_intents() -> list[dict[str, Any]]:
+    return SUPPORTED_QUERY_INTENTS
+
+
+def _matches_keywords(question: str, keywords: list[str]) -> bool:
+    q = re.sub(r"\s+", " ", question.lower()).strip()
+    return any(keyword in q for keyword in keywords)
+
+
+def _intent_supported(question: str) -> str | None:
+    for intent in SUPPORTED_QUERY_INTENTS:
+        if intent["category"] == "unsupported":
+            continue
+        if _matches_keywords(question, intent["keywords"]):
+            return str(intent["id"])
+    return None
+
+
+def _unsupported_metric_message(question: str) -> str | None:
+    q = question.lower()
+    unsupported_patterns = [
+        "p&l",
+        "profit",
+        "profitable",
+        "loss",
+        "losses",
+        "win rate",
+        "vwap",
+        "slippage",
+        "execution quality",
+        "benchmark price",
+        "benchmark",
+        "execution price vs benchmark",
+    ]
+    if any(pattern in q for pattern in unsupported_patterns):
+        return UNSUPPORTED_METRIC_MESSAGE
+    return None
+
+
+def _rule_based_sql(question: str, context: dict[str, Any] | None) -> str | None:
+    q = re.sub(r"\s+", " ", question.lower()).strip()
+    prefer_trade_blotter = bool((context or {}).get("preferTradeBlotter"))
+    if not q:
+        return None
+
+    today = "__TODAY__"
+    yesterday = "__YESTERDAY__"
+    intent_id = _intent_supported(q)
+
+    if intent_id == "most_traded_securities" or ("most traded securit" in q or "traded the most" in q and "securit" in q):
+        metric = "COUNT(*) AS trade_count, SUM(t.notional_usd) AS total_notional_usd"
+        order_by = "trade_count DESC, total_notional_usd DESC"
+        if "shares" in q or "volume" in q:
+            metric = "SUM(t.notional) AS total_volume, COUNT(*) AS trade_count, SUM(t.notional_usd) AS total_notional_usd"
+            order_by = "total_volume DESC, trade_count DESC"
+        return (
+            "SELECT s.ticker, s.cusip, s.issuer_name, s.product, s.sector, "
+            f"{metric} "
+            "FROM trades t JOIN securities s ON t.cusip = s.cusip "
+            f"WHERE t.trade_date = date('{today}') "
+            "GROUP BY s.ticker, s.cusip, s.issuer_name, s.product, s.sector "
+            f"ORDER BY {order_by} LIMIT 20;"
+        )
+
+    if ("traded the most" in q or "most activity" in q) and ("sector" not in q and "trader" not in q and "securit" not in q):
+        return (
+            "SELECT s.product, s.sector, COUNT(*) AS trade_count, SUM(t.notional) AS total_volume, "
+            "SUM(t.notional_usd) AS total_notional_usd "
+            "FROM trades t JOIN securities s ON t.cusip = s.cusip "
+            f"WHERE t.trade_date = date('{today}') "
+            "GROUP BY s.product, s.sector "
+            "ORDER BY total_notional_usd DESC, trade_count DESC LIMIT 20;"
+        )
+
+    if intent_id == "top_traders_by_activity" or ("which traders executed the most trades" in q or ("most trades" in q and "trader" in q)):
+        return (
+            "SELECT tr.id AS trader_id, tr.name AS trader_name, d.name AS desk_name, "
+            "COUNT(*) AS trade_count, SUM(t.notional) AS total_volume, SUM(t.notional_usd) AS total_notional_usd "
+            "FROM trades t JOIN traders tr ON t.trader_id = tr.id "
+            "JOIN desks d ON tr.desk_id = d.id "
+            f"WHERE t.trade_date = date('{today}') "
+            "GROUP BY tr.id, tr.name, d.name "
+            "ORDER BY trade_count DESC, total_notional_usd DESC LIMIT 20;"
+        )
+
+    if ("best performance" in q or "top performing trader" in q) and "today" in q:
+        return (
+            "SELECT tr.id AS trader_id, tr.name AS trader_name, d.name AS desk_name, "
+            "COUNT(*) AS trade_count, SUM(t.notional_usd) AS total_notional_usd, "
+            "AVG(t.notional_usd) AS avg_trade_notional "
+            "FROM trades t JOIN traders tr ON t.trader_id = tr.id "
+            "JOIN desks d ON tr.desk_id = d.id "
+            f"WHERE t.trade_date = date('{today}') "
+            "GROUP BY tr.id, tr.name, d.name "
+            "ORDER BY total_notional_usd DESC, trade_count DESC LIMIT 20;"
+        )
+
+    if intent_id == "sector_activity" or ("sectors had the most trading activity" in q or ("most activity" in q and "sector" in q)):
+        return (
+            "SELECT s.sector, COUNT(*) AS trade_count, SUM(t.notional) AS total_volume, "
+            "SUM(t.notional_usd) AS total_notional_usd "
+            "FROM trades t JOIN securities s ON t.cusip = s.cusip "
+            f"WHERE t.trade_date = date('{today}') "
+            "GROUP BY s.sector ORDER BY total_notional_usd DESC, trade_count DESC LIMIT 20;"
+        )
+
+    if "which securities were traded the most today" in q or "largest securities today" in q:
+        return (
+            "SELECT s.ticker, s.cusip, s.issuer_name, s.product, s.sector, COUNT(*) AS trade_count, "
+            "SUM(t.notional) AS total_volume, SUM(t.notional_usd) AS total_notional_usd "
+            "FROM trades t JOIN securities s ON t.cusip = s.cusip "
+            f"WHERE t.trade_date = date('{today}') "
+            "GROUP BY s.ticker, s.cusip, s.issuer_name, s.product, s.sector "
+            "ORDER BY total_notional_usd DESC, trade_count DESC LIMIT 20;"
+        )
+
+    if (
+        "compare to yesterday" in q
+        or "compared to yesterday" in q
+        or "historical average" in q
+        or "today's trading volume compare" in q
+    ):
+        return (
+            "WITH daily AS ("
+            "SELECT trade_date, COUNT(*) AS trade_count, SUM(notional) AS total_volume, SUM(notional_usd) AS total_notional_usd "
+            "FROM trades GROUP BY trade_date"
+            "), avg_hist AS ("
+            "SELECT AVG(trade_count) AS avg_trade_count, AVG(total_volume) AS avg_total_volume, "
+            "AVG(total_notional_usd) AS avg_total_notional_usd FROM daily"
+            ") "
+            "SELECT "
+            f"(SELECT trade_count FROM daily WHERE trade_date = date('{today}')) AS today_trade_count, "
+            f"(SELECT total_volume FROM daily WHERE trade_date = date('{today}')) AS today_total_volume, "
+            f"(SELECT total_notional_usd FROM daily WHERE trade_date = date('{today}')) AS today_total_notional_usd, "
+            f"(SELECT trade_count FROM daily WHERE trade_date = {yesterday}) AS yesterday_trade_count, "
+            f"(SELECT total_volume FROM daily WHERE trade_date = {yesterday}) AS yesterday_total_volume, "
+            f"(SELECT total_notional_usd FROM daily WHERE trade_date = {yesterday}) AS yesterday_total_notional_usd, "
+            "avg_trade_count, avg_total_volume, avg_total_notional_usd, "
+            "ROUND(CAST((SELECT total_volume FROM daily WHERE trade_date = date('__TODAY__')) AS REAL) / NULLIF(avg_total_volume, 0), 2) "
+            "AS volume_vs_average_ratio "
+            "FROM avg_hist;"
+        )
+
+    if "historical average" in q and ("security" in q or "ticker" in q or "securit" in q):
+        return (
+            "WITH daily_security AS ("
+            "SELECT t.trade_date, s.ticker, s.cusip, s.issuer_name, COUNT(*) AS trade_count, "
+            "SUM(t.notional) AS total_volume, SUM(t.notional_usd) AS total_notional_usd "
+            "FROM trades t JOIN securities s ON t.cusip = s.cusip "
+            "GROUP BY t.trade_date, s.ticker, s.cusip, s.issuer_name"
+            "), baselines AS ("
+            "SELECT ticker, cusip, AVG(trade_count) AS avg_trade_count, AVG(total_volume) AS avg_volume, "
+            "AVG(total_notional_usd) AS avg_notional FROM daily_security GROUP BY ticker, cusip"
+            ") "
+            "SELECT d.ticker, d.cusip, d.issuer_name, d.trade_count, d.total_volume, d.total_notional_usd, "
+            "b.avg_trade_count, b.avg_volume, b.avg_notional, "
+            "ROUND(d.total_volume / NULLIF(b.avg_volume, 0), 2) AS volume_vs_avg_ratio "
+            "FROM daily_security d JOIN baselines b ON d.ticker = b.ticker AND d.cusip = b.cusip "
+            f"WHERE d.trade_date = date('{today}') "
+            "ORDER BY volume_vs_avg_ratio DESC, d.total_notional_usd DESC LIMIT 20;"
+        )
+
+    if intent_id == "unusual_volume" or ("unusual trading volume" in q or ("abnormal" in q and "volume" in q)):
+        return (
+            "WITH daily_security AS ("
+            "SELECT t.trade_date, s.ticker, s.cusip, s.issuer_name, s.product, s.sector, "
+            "COUNT(*) AS trade_count, SUM(t.notional) AS total_volume, SUM(t.notional_usd) AS total_notional_usd "
+            "FROM trades t JOIN securities s ON t.cusip = s.cusip "
+            "GROUP BY t.trade_date, s.ticker, s.cusip, s.issuer_name, s.product, s.sector"
+            "), baselines AS ("
+            "SELECT ticker, cusip, AVG(total_volume) AS avg_volume, "
+            "AVG(total_notional_usd) AS avg_notional, AVG(trade_count) AS avg_trade_count "
+            "FROM daily_security GROUP BY ticker, cusip"
+            ") "
+            "SELECT d.ticker, d.cusip, d.issuer_name, d.product, d.sector, d.trade_count, d.total_volume, "
+            "d.total_notional_usd, b.avg_volume, b.avg_notional, b.avg_trade_count, "
+            "ROUND(d.total_volume / NULLIF(b.avg_volume, 0), 2) AS volume_vs_avg_ratio "
+            "FROM daily_security d JOIN baselines b ON d.ticker = b.ticker AND d.cusip = b.cusip "
+            f"WHERE d.trade_date = date('{today}') "
+            "ORDER BY volume_vs_avg_ratio DESC, d.total_notional_usd DESC LIMIT 20;"
+        )
+
+    if intent_id == "counterparty_activity" or ("highest activity" in q and "counterparty" in q):
+        return (
+            "SELECT cp.id AS counterparty_id, cp.name AS counterparty_name, COUNT(*) AS trade_count, "
+            "SUM(t.notional) AS total_volume, SUM(t.notional_usd) AS total_notional_usd "
+            "FROM trades t JOIN counterparties cp ON t.counterparty_id = cp.id "
+            f"WHERE t.trade_date = date('{today}') "
+            "GROUP BY cp.id, cp.name ORDER BY total_notional_usd DESC, trade_count DESC LIMIT 20;"
+        )
+
+    if intent_id == "largest_trades" and "today" in q or ("largest trades today" in q or ("largest trade" in q and "today" in q)):
+        return (
+            "SELECT * FROM v_trades_full "
+            f"WHERE trade_date = date('{today}') "
+            "ORDER BY notional_usd DESC, notional DESC LIMIT 25;"
+            if prefer_trade_blotter
+            else
+            "SELECT ticker, cusip, issuer_name, product, sector, counterparty_name, trader_name, "
+            "trade_date, execution_timestamp, notional, notional_usd, clean_price "
+            "FROM v_trades_full "
+            f"WHERE trade_date = date('{today}') "
+            "ORDER BY notional_usd DESC, notional DESC LIMIT 25;"
+        )
+
+    if "largest trade" in q:
+        return (
+            "SELECT * FROM v_trades_full ORDER BY notional_usd DESC, notional DESC LIMIT 25;"
+            if prefer_trade_blotter
+            else
+            "SELECT ticker, cusip, issuer_name, product, sector, counterparty_name, trader_name, "
+            "trade_date, execution_timestamp, notional, notional_usd, clean_price "
+            "FROM v_trades_full ORDER BY notional_usd DESC, notional DESC LIMIT 25;"
+        )
+
+    if "top traders" in q and ("amount" in q or "notional" in q or "volume" in q):
+        return (
+            "SELECT trader_id, trader_name, desk_name, trade_count, total_notional_usd, "
+            "(buy_notional_usd + sell_notional_usd) AS gross_notional_usd "
+            "FROM v_trader_performance ORDER BY total_notional_usd DESC LIMIT 20;"
+        )
+
+    if "highest win rate" in q:
+        return None
+
+    if intent_id == "behavior_change" or ("trading behavior" in q or "change their trading patterns" in q or "increased their trading frequency" in q):
+        return (
+            "WITH daily_trader AS ("
+            "SELECT t.trade_date, tr.id AS trader_id, tr.name AS trader_name, d.name AS desk_name, "
+            "COUNT(*) AS trade_count, AVG(t.notional_usd) AS avg_trade_notional, SUM(t.notional_usd) AS total_notional_usd "
+            "FROM trades t JOIN traders tr ON t.trader_id = tr.id "
+            "JOIN desks d ON tr.desk_id = d.id "
+            "GROUP BY t.trade_date, tr.id, tr.name, d.name"
+            "), trader_avg AS ("
+            "SELECT trader_id, AVG(trade_count) AS avg_trade_count, AVG(avg_trade_notional) AS avg_ticket_size "
+            "FROM daily_trader GROUP BY trader_id"
+            ") "
+            "SELECT d.trader_id, d.trader_name, d.desk_name, d.trade_count, d.avg_trade_notional, d.total_notional_usd, "
+            "a.avg_trade_count, a.avg_ticket_size, "
+            "ROUND(d.trade_count / NULLIF(a.avg_trade_count, 0), 2) AS trade_count_vs_avg_ratio, "
+            "ROUND(d.avg_trade_notional / NULLIF(a.avg_ticket_size, 0), 2) AS ticket_size_vs_avg_ratio "
+            "FROM daily_trader d JOIN trader_avg a ON d.trader_id = a.trader_id "
+            f"WHERE d.trade_date = date('{today}') "
+            "ORDER BY trade_count_vs_avg_ratio DESC, ticket_size_vs_avg_ratio DESC LIMIT 20;"
+        )
+
+    if intent_id == "trade_outliers" or ("unusual trading activity" in q or "outlier" in q or "abnormal trading patterns" in q or "unusual patterns" in q):
+        return (
+            "WITH enriched AS ("
+            "SELECT v.*, "
+            "AVG(v.notional_usd) OVER (PARTITION BY v.trader_name) AS trader_avg_notional, "
+            "AVG(v.clean_price) OVER (PARTITION BY v.ticker) AS ticker_avg_price "
+            "FROM v_trades_full v"
+            ") "
+            "SELECT internal_trade_id, trade_date, execution_timestamp, ticker, cusip, issuer_name, "
+            "product, sector, trader_name, counterparty_name, side, notional, notional_usd, clean_price, "
+            "ROUND(notional_usd / NULLIF(trader_avg_notional, 0), 2) AS trade_size_vs_trader_avg, "
+            "ROUND(clean_price - ticker_avg_price, 4) AS price_deviation_from_ticker_avg "
+            "FROM enriched "
+            f"WHERE trade_date = date('{today}') "
+            "ORDER BY trade_size_vs_trader_avg DESC, ABS(price_deviation_from_ticker_avg) DESC LIMIT 25;"
+        )
+
+    if "which trades were outliers" in q or ("outlier" in q and "trade" in q):
+        return (
+            "WITH enriched AS ("
+            "SELECT v.*, AVG(v.notional_usd) OVER (PARTITION BY v.trader_name) AS trader_avg_notional, "
+            "AVG(v.clean_price) OVER (PARTITION BY v.ticker) AS ticker_avg_price "
+            "FROM v_trades_full v"
+            ") "
+            "SELECT * FROM enriched "
+            f"WHERE trade_date = date('{today}') "
+            "ORDER BY ABS(clean_price - ticker_avg_price) DESC, notional_usd / NULLIF(trader_avg_notional, 0) DESC LIMIT 25;"
+            if prefer_trade_blotter
+            else
+            "WITH enriched AS ("
+            "SELECT v.*, AVG(v.notional_usd) OVER (PARTITION BY v.trader_name) AS trader_avg_notional, "
+            "AVG(v.clean_price) OVER (PARTITION BY v.ticker) AS ticker_avg_price "
+            "FROM v_trades_full v"
+            ") "
+            "SELECT internal_trade_id, trade_date, execution_timestamp, ticker, cusip, issuer_name, product, "
+            "sector, trader_name, counterparty_name, side, notional, notional_usd, clean_price, "
+            "ROUND(notional_usd / NULLIF(trader_avg_notional, 0), 2) AS trade_size_vs_trader_avg, "
+            "ROUND(clean_price - ticker_avg_price, 4) AS price_deviation_from_ticker_avg "
+            "FROM enriched "
+            f"WHERE trade_date = date('{today}') "
+            "ORDER BY ABS(clean_price - ticker_avg_price) DESC, trade_size_vs_trader_avg DESC LIMIT 25;"
+        )
+
+    return None
+
+
 def _generate_sql_bedrock_with_error(question: str, context: dict[str, Any] | None) -> tuple[str | None, str | None]:
     """Generate SQL using AWS Bedrock. Returns (sql, error_message)."""
+    rule_based = _rule_based_sql(question, context)
+    if rule_based:
+        return _apply_sample_date_aliases(rule_based), None
+
     prompt = question
     if context:
         ctx_copy = {
@@ -66,11 +528,16 @@ def _generate_sql_bedrock_with_error(question: str, context: dict[str, Any] | No
         target_rule = """IMPORTANT: The user is viewing the Trade Blotter. Return trade-level rows from v_trades_full so results appear in the blotter grid. Use SELECT * FROM v_trades_full (with WHERE/ORDER BY/LIMIT as needed) or queries that return full trade rows. Avoid aggregates-only; the user wants to see individual trades."""
     else:
         target_rule = """The user is viewing the AI Data Table. Aggregates, summaries, and custom columns are fine. For summary questions (totals, averages, counts by dimension) return the aggregate query."""
+    latest_trade_date = _latest_trade_date()
     system = f"""You are a SQL expert for a fixed income trading database (SQLite).
 Schema (snake_case):
 {DDL[:3000]}
 
 Rule: Two output types. (1) Trade Blotter: For 'top N by price' or 'top 10 order by price' or 'give me top 10 trader order by price', use the simple query: SELECT * FROM v_trades_full ORDER BY clean_price DESC LIMIT N. Do not use a subquery. For trades from top N traders by amount/count (not price), use the subquery pattern. (2) AI Data Table: for summary-only questions (average price by trader, total by product) return the aggregate query; that result is shown in the AI Data Table panel.
+
+Date handling rule: this sample dataset's latest available trade_date is {latest_trade_date}. Treat "today" as date('{latest_trade_date}'), "yesterday" as date('{latest_trade_date}', '-1 day'), "last 7 days" as trade_date >= date('{latest_trade_date}', '-6 days'), and "last 30 days" as trade_date >= date('{latest_trade_date}', '-29 days'). Do not rely on date('now') for this app.
+
+Capability rule: the dataset supports trade counts, trade lists, notional, volume, sector activity, trader activity, simple behavior changes, and anomaly-style comparisons. It does NOT include realized P&L, win rate, VWAP, benchmark price, or slippage columns. If the question requires those unsupported metrics, do not invent SQL or columns.
 
 {target_rule}
 
@@ -83,9 +550,79 @@ Generate only a single SQL SELECT statement, no explanation. Use tables: trades,
         return None, err
     if not text:
         return None, "Bedrock returned no text."
-    match = re.search(r"(SELECT\s+.+?)(?:;|$)", text, re.IGNORECASE | re.DOTALL)
-    sql = (match.group(1).strip() + ";" if match else text) or None
+    sql = _sanitize_generated_sql(text)
     return sql, None
+
+
+def _sanitize_generated_sql(text: str | None) -> str | None:
+    if not text:
+        return None
+    cleaned = text.strip()
+    cleaned = re.sub(r"^```(?:sql)?\s*", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s*```$", "", cleaned)
+    cleaned = re.sub(r"--.*?$", "", cleaned, flags=re.MULTILINE)
+
+    with_match = re.search(r"(WITH\s+.+?)(?:;|$)", cleaned, re.IGNORECASE | re.DOTALL)
+    select_match = re.search(r"(SELECT\s+.+?)(?:;|$)", cleaned, re.IGNORECASE | re.DOTALL)
+    sql = with_match.group(1).strip() if with_match else (select_match.group(1).strip() if select_match else cleaned)
+
+    sql = re.sub(r",\s*\)", ")", sql)
+    sql = re.sub(r"\(\s*\)", "(NULL)", sql)
+    sql = re.sub(r"\bIN\s*\(\s*NULL\s*\)", "IN (SELECT NULL WHERE 1=0)", sql, flags=re.IGNORECASE)
+    sql = re.sub(r"\bWHERE\s+AND\b", "WHERE", sql, flags=re.IGNORECASE)
+    sql = re.sub(r"\bOR\s+\)", ")", sql, flags=re.IGNORECASE)
+    sql = re.sub(r"\bAND\s+\)", ")", sql, flags=re.IGNORECASE)
+    sql = re.sub(r"\s+", " ", sql)
+    sql = re.sub(r";+\s*$", "", sql).strip()
+    sql = _apply_sample_date_aliases(sql)
+    return f"{sql};" if sql else None
+
+
+def _validate_sql(sql: str | None) -> str | None:
+    if not sql:
+        return "No SQL generated."
+    stripped = sql.strip()
+    upper = stripped.upper()
+    if not (upper.startswith("SELECT") or upper.startswith("WITH")):
+        return "Only SELECT queries are allowed."
+    if stripped.count("(") != stripped.count(")"):
+        return "Generated SQL has mismatched parentheses."
+    if re.search(r",\s*(FROM|WHERE|GROUP BY|ORDER BY|LIMIT|\))", stripped, re.IGNORECASE):
+        return "Generated SQL has a trailing comma."
+    if re.search(r"\bIN\s*\(\s*\)", stripped, re.IGNORECASE):
+        return "Generated SQL has an empty IN clause."
+    forbidden = re.search(r"\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|ATTACH|DETACH|PRAGMA)\b", upper)
+    if forbidden:
+        return "Only read-only SELECT queries are allowed."
+    return None
+
+
+def _repair_sql_after_error(
+    question: str,
+    bad_sql: str,
+    error_message: str,
+    context: dict[str, Any] | None = None,
+) -> tuple[str | None, str | None]:
+    latest_trade_date = _latest_trade_date()
+    system = f"""You are fixing a SQLite SELECT query for a fixed income trading database.
+The latest available trade_date in this sample data is {latest_trade_date}. Treat "today" as date('{latest_trade_date}').
+Return only a corrected SQLite SELECT statement. No explanation. No markdown. No comments.
+Only use tables: trades, securities, counterparties, traders, desks, or views v_trades_full, v_daily_summary, v_counterparty_activity, v_trader_performance."""
+    prompt = (
+        f"User question:\n{question}\n\n"
+        f"Broken SQL:\n{bad_sql}\n\n"
+        f"SQLite error:\n{error_message}\n\n"
+        "Fix the SQL so it runs correctly in SQLite and answers the same question."
+    )
+    if context:
+        prompt += "\n\nOptional dashboard context:\n" + json.dumps(
+            {k: v for k, v in context.items() if k not in ("previousQueryResult", "conversationHistory")},
+            default=str,
+        )
+    text, err = _bedrock_chat([{"role": "user", "content": prompt}], system=system)
+    if err:
+        return None, err
+    return _sanitize_generated_sql(text), None
 
 
 def train_vanna() -> tuple[bool, str]:
@@ -96,15 +633,23 @@ def train_vanna() -> tuple[bool, str]:
 def generate_sql(question: str, context: dict[str, Any] | None = None) -> tuple[str | None, str | None]:
     """Generate SQL from natural language via Bedrock."""
     sql, sql_err = _generate_sql_bedrock_with_error(question, context)
-    if sql:
+    validation_err = _validate_sql(sql)
+    if sql and not validation_err:
         return sql, None
+    if validation_err and sql:
+        repaired_sql, repair_err = _repair_sql_after_error(question, sql, validation_err, context)
+        repaired_validation_err = _validate_sql(repaired_sql)
+        if repaired_sql and not repair_err and not repaired_validation_err:
+            return repaired_sql, None
+        return None, repaired_validation_err or repair_err or validation_err
     return None, sql_err or "Bedrock failed. Check backend/bedrock_credentials.env (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION, BEDROCK_MODEL_ID)."
 
 
 def run_sql(sql: str) -> tuple[list[dict] | None, str | None]:
     """Execute SQL against SQLite. Ensures DB exists and is populated (same as /api/trades)."""
-    if not sql or not sql.strip().upper().startswith("SELECT"):
-        return None, "Only SELECT queries are allowed."
+    validation_err = _validate_sql(sql)
+    if validation_err:
+        return None, validation_err
     try:
         from backend.db import ensure_db
         ensure_db()
@@ -236,8 +781,317 @@ def suggest_chart_type(question: str, columns: list[str], row_count: int) -> str
     return None
 
 
+def _format_metric_label(name: str) -> str:
+    return name.replace("_", " ").title()
+
+
+def _metric_formatter(metric_name: str | None) -> str:
+    metric = (metric_name or "").lower()
+    if "ratio" in metric or "pct" in metric or "percent" in metric or "share" in metric:
+        return "{c}%"
+    if "price" in metric or "yield" in metric or "deviation" in metric:
+        return "{c}"
+    if "notional" in metric or "volume" in metric or "amount" in metric or "gross" in metric:
+        return "${c}"
+    return "{c}"
+
+
+def _pick_chart_columns(rows: list[dict], columns: list[str]) -> tuple[str | None, str | None]:
+    if not rows or not columns:
+        return None, None
+    category_priority = [
+        "ticker",
+        "issuer_name",
+        "product",
+        "sector",
+        "counterparty_name",
+        "trader_name",
+        "trader_id",
+        "desk_name",
+        "side",
+        "trade_date",
+        "date",
+    ]
+    metric_priority = [
+        "volume_vs_avg_ratio",
+        "trade_count_vs_avg_ratio",
+        "ticket_size_vs_avg_ratio",
+        "total_notional_usd",
+        "gross_notional_usd",
+        "total_volume",
+        "trade_count",
+        "avg_trade_notional",
+        "avg_notional",
+        "avg_volume",
+        "avg_trade_count",
+        "notional_usd",
+        "notional",
+        "clean_price",
+        "yield",
+        "price_deviation_from_ticker_avg",
+        "trade_size_vs_trader_avg",
+    ]
+    category = next((c for c in category_priority if c in columns), None)
+    if category is None:
+        category = next((c for c in columns if not isinstance(rows[0].get(c), (int, float))), None)
+    metric = next((c for c in metric_priority if c in columns and isinstance(rows[0].get(c), (int, float))), None)
+    if metric is None:
+        metric = next((c for c in columns if c != category and isinstance(rows[0].get(c), (int, float))), None)
+    return category, metric
+
+
+def _tooltip_js(metric_name: str | None, chart_type: str) -> str:
+    label = _format_metric_label(metric_name or "value")
+    is_pct = chart_type in ("pie", "doughnut")
+    prefix = _metric_formatter(metric_name)
+    return (
+        "function(params){"
+        "const point = Array.isArray(params) ? (params[0] || {}) : params;"
+        "const rawValue = point && Object.prototype.hasOwnProperty.call(point, 'value')"
+        " ? point.value"
+        " : (point && point.data && Object.prototype.hasOwnProperty.call(point.data, 'value') ? point.data.value : undefined);"
+        "const baseValue = Array.isArray(rawValue) ? rawValue[1] : rawValue;"
+        "const val = baseValue != null ? baseValue : (typeof point.axisValue !== 'undefined' ? point.axisValue : undefined);"
+        f"const metric = '{label}';"
+        f"const prefix = '{prefix}';"
+        "const formatted = (typeof val === 'number')"
+        " ? (prefix === '${c}' ? ('$' + Number(val).toLocaleString(undefined,{maximumFractionDigits:2}))"
+        " : (prefix === '{c}%' ? (Number(val).toFixed(2) + '%') : Number(val).toLocaleString(undefined,{maximumFractionDigits:4})))"
+        " : String(val ?? '');"
+        + ("return `${point.name}<br/>${metric}: ${formatted}<br/>Share: ${Number(point.percent || 0).toFixed(1)}%`;}" if is_pct
+           else "return `${point.name || ''}<br/>${metric}: ${formatted}`;}")
+    )
+
+
+def _is_generic_graph_followup(question: str) -> bool:
+    normalized = re.sub(r"\s+", " ", (question or "").strip().lower())
+    return normalized in {
+        "yes",
+        "yeah",
+        "yep",
+        "please",
+        "sure",
+        "ok",
+        "okay",
+        "yes please",
+        "sure please",
+        "show graph",
+        "show chart",
+        "create graph",
+        "create a graph",
+        "make graph",
+        "make a graph",
+    }
+
+
+def _derive_chart_title(question: str, category_col: str | None, metric_col: str) -> str:
+    metric_label = _format_metric_label(metric_col)
+    if category_col:
+        category_label = _format_metric_label(category_col)
+        if len(metric_label) <= 22 and len(category_label) <= 18:
+            return f"{metric_label} by {category_label}"
+        return f"{metric_label} View"
+    return metric_label[:28]
+
+
+def _build_chart_option(
+    rows: list[dict],
+    columns: list[str],
+    question: str,
+    chart_type: str | None,
+) -> dict | None:
+    if not rows or not columns:
+        return None
+    chart_type = chart_type or "bar"
+    category_col, metric_col = _pick_chart_columns(rows, columns)
+    if metric_col is None:
+        return None
+
+    palette = ["#0EA5E9", "#14B8A6", "#F59E0B", "#EF4444", "#8B5CF6", "#22C55E", "#F97316", "#6366F1", "#EAB308", "#EC4899"]
+    grid = {"top": 78, "right": 32, "bottom": 86, "left": 76, "containLabel": True}
+    tooltip = {
+        "trigger": "item" if chart_type in ("pie", "doughnut") else "axis",
+        "triggerOn": "mousemove|click",
+        "backgroundColor": "#2d2d2d",
+        "borderColor": "#3d3d3d",
+        "textStyle": {"color": "#e0e0e0", "fontSize": 12},
+        "confine": True,
+        "axisPointer": {"type": "shadow" if chart_type == "bar" else "line"} if chart_type not in ("pie", "doughnut", "scatter") else None,
+        "formatter": _tooltip_js(metric_col, chart_type),
+    }
+    title = {
+        "text": _derive_chart_title(question, category_col, metric_col),
+        "left": "center",
+        "top": 10,
+        "textStyle": {"color": "#f5f7fa", "fontSize": 12, "fontWeight": 700},
+    }
+    axis_style = {"axisLine": {"lineStyle": {"color": "#3d3d3d"}}, "axisTick": {"show": False}, "axisLabel": {"color": "#a0a0a0", "fontSize": 11}}
+
+    trimmed = rows[:20 if chart_type not in ("line", "area", "scatter") else 40]
+    categories = [str(r.get(category_col, f"Row {i+1}")) if category_col else f"Row {i+1}" for i, r in enumerate(trimmed)]
+    values = [r.get(metric_col) for r in trimmed]
+    numeric_values = [v for v in values if isinstance(v, (int, float))]
+    max_value = max(numeric_values) if numeric_values else None
+
+    if chart_type in ("pie", "doughnut"):
+        series = {
+            "type": "pie",
+            "name": _format_metric_label(metric_col),
+            "radius": ["42%", "72%"] if chart_type == "doughnut" else "68%",
+            "center": ["50%", "52%"],
+            "data": [{"name": categories[i], "value": values[i]} for i in range(len(categories))],
+            "color": palette,
+            "itemStyle": {"borderRadius": 8, "borderColor": "#1e1e1e", "borderWidth": 2},
+            "label": {"show": False},
+            "labelLine": {"lineStyle": {"color": "#3d3d3d"}},
+            "emphasis": {"scale": True, "itemStyle": {"shadowBlur": 14, "shadowColor": "rgba(0,0,0,0.45)"}},
+        }
+        return {
+            "backgroundColor": "transparent",
+            "title": title,
+            "tooltip": tooltip,
+            "legend": {
+                "type": "scroll",
+                "bottom": 6,
+                "left": "center",
+                "icon": "circle",
+                "textStyle": {"color": "#cdd6df", "fontSize": 11},
+            },
+            "series": [series],
+        }
+
+    if category_col and ("date" in category_col.lower() or category_col.lower() == "trade_date") and chart_type not in ("scatter",):
+        categories = categories
+
+    if chart_type == "scatter":
+        x_candidates = [c for c in columns if c != metric_col and isinstance(rows[0].get(c), (int, float))]
+        if not x_candidates:
+            return None
+        x_col = x_candidates[0]
+        series = [{
+            "type": "scatter",
+            "name": _format_metric_label(metric_col),
+            "data": [[r.get(x_col), r.get(metric_col), str(r.get(category_col, ""))] for r in trimmed],
+            "symbolSize": 10,
+            "itemStyle": {"color": palette[1], "opacity": 0.85},
+            "emphasis": {"scale": 1.8, "itemStyle": {"borderColor": "#fff", "borderWidth": 1}},
+        }]
+        return {
+            "backgroundColor": "transparent",
+            "title": title,
+            "grid": grid,
+            "legend": {"top": 38, "left": "center", "icon": "circle", "textStyle": {"color": "#cdd6df", "fontSize": 11}},
+            "tooltip": {
+                **tooltip,
+                "formatter": (
+                    "function(params){"
+                    f"const xLabel = '{_format_metric_label(x_col)}';"
+                    f"const yLabel = '{_format_metric_label(metric_col)}';"
+                    "return `${params.value[2] || 'Point'}<br/>${xLabel}: ${params.value[0]}<br/>${yLabel}: ${params.value[1]}`;}"
+                ),
+            },
+            "xAxis": {"type": "value", "name": _format_metric_label(x_col), **axis_style, "splitLine": {"lineStyle": {"color": "#2d2d2d", "type": "dashed"}}},
+            "yAxis": {"type": "value", "name": _format_metric_label(metric_col), **axis_style, "splitLine": {"lineStyle": {"color": "#2d2d2d", "type": "dashed"}}},
+            "series": series,
+        }
+
+    common_series = {
+        "data": values,
+        "label": {"show": False},
+            "itemStyle": {"color": palette[1], "borderRadius": [8, 8, 0, 0]},
+            "emphasis": {"itemStyle": {"borderColor": "#fff", "borderWidth": 1}},
+            "markPoint": {"data": [{"type": "max", "name": "Top"}]} if max_value is not None else None,
+    }
+
+    if chart_type == "bar":
+        bar_data = [
+                {
+                    "value": values[i],
+                    "itemStyle": {
+                        "color": {
+                            "type": "linear",
+                            "x": 0,
+                            "y": 0,
+                            "x2": 0,
+                            "y2": 1,
+                            "colorStops": [
+                                {"offset": 0, "color": palette[i % len(palette)]},
+                                {"offset": 1, "color": "rgba(255,255,255,0.12)"},
+                            ],
+                        },
+                        "borderRadius": [8, 8, 0, 0],
+                    },
+                }
+                for i in range(len(values))
+        ]
+        return {
+            "backgroundColor": "transparent",
+            "title": title,
+            "grid": grid,
+            "legend": {"top": 38, "left": "center", "icon": "circle", "textStyle": {"color": "#cdd6df", "fontSize": 11}},
+            "tooltip": tooltip,
+            "xAxis": {"type": "category", "data": categories, **axis_style, "axisLabel": {**axis_style["axisLabel"], "rotate": 24}},
+            "yAxis": {"type": "value", "name": _format_metric_label(metric_col), **axis_style, "splitLine": {"lineStyle": {"color": "#2d2d2d", "type": "dashed"}}},
+            "series": [{
+                "type": "bar",
+                **common_series,
+                "name": _format_metric_label(metric_col),
+                "data": bar_data,
+            }],
+        }
+
+    if chart_type in ("line", "area"):
+        series = {
+            "type": "line",
+            "name": _format_metric_label(metric_col),
+            **common_series,
+            "smooth": True,
+            "symbol": "circle",
+            "symbolSize": 8,
+            "lineStyle": {"width": 3, "color": palette[0]},
+            "itemStyle": {"color": palette[0]},
+            "areaStyle": {"color": {"type": "linear", "x": 0, "y": 0, "x2": 0, "y2": 1, "colorStops": [{"offset": 0, "color": "rgba(14,165,233,0.42)"}, {"offset": 1, "color": "rgba(20,184,166,0.06)"}]}} if chart_type == "area" else None,
+            "label": {"show": False},
+            "endLabel": {"show": False} if values else None,
+        }
+        return {
+            "backgroundColor": "transparent",
+            "title": title,
+            "grid": grid,
+            "legend": {"top": 38, "left": "center", "icon": "circle", "textStyle": {"color": "#cdd6df", "fontSize": 11}},
+            "tooltip": tooltip,
+            "xAxis": {"type": "category", "data": categories, **axis_style},
+            "yAxis": {"type": "value", "name": _format_metric_label(metric_col), **axis_style, "splitLine": {"lineStyle": {"color": "#2d2d2d", "type": "dashed"}}},
+            "series": [series],
+        }
+
+    return None
+
+
+def _finalize_chart_option(
+    chart_option: dict | None,
+    rows: list[dict],
+    columns: list[str],
+    question: str,
+) -> dict | None:
+    chart_type = _extract_chart_type_preference(question) or suggest_chart_type(question, columns, len(rows)) or "bar"
+    local_option = _build_chart_option(rows, columns, question, chart_type)
+    return local_option or chart_option
+
+
 def text_to_sql_and_run(question: str, context: dict[str, Any] | None = None) -> dict[str, Any]:
     """Mode 1: Generate SQL, execute, return data + optional ECharts option. Two-pass AI for summary and anomalies."""
+    unsupported_message = _unsupported_metric_message(question)
+    if unsupported_message:
+        return {
+            "data": [],
+            "sql": None,
+            "chartOption": None,
+            "aiSummary": unsupported_message,
+            "anomalyTradeIds": [],
+            "error": unsupported_message,
+        }
+
     previous = (context or {}).get("previousQueryResult") or {}
     prev_data = previous.get("data") if isinstance(previous, dict) else []
     if (
@@ -251,6 +1105,7 @@ def text_to_sql_and_run(question: str, context: dict[str, Any] | None = None) ->
         chart_option = _generate_chart_from_data(
             prev_data, columns, chart_type_hint=chart_type
         )
+        chart_option = _finalize_chart_option(chart_option, prev_data, columns, question)
         prev_sql = previous.get("sql", "")
         return {
             "data": prev_data,
@@ -283,6 +1138,19 @@ def text_to_sql_and_run(question: str, context: dict[str, Any] | None = None) ->
         }
 
     rows, run_err = run_sql(sql)
+    attempts = 0
+    while run_err and attempts < 2:
+        repaired_sql, repair_err = _repair_sql_after_error(question, sql, run_err, context)
+        if not repaired_sql or repair_err:
+            break
+        rows, next_err = run_sql(repaired_sql)
+        if not next_err:
+            sql = repaired_sql
+            run_err = None
+            break
+        sql = repaired_sql
+        run_err = next_err
+        attempts += 1
     if run_err:
         return {
             "data": [],
@@ -290,7 +1158,10 @@ def text_to_sql_and_run(question: str, context: dict[str, Any] | None = None) ->
             "chartOption": None,
             "aiSummary": None,
             "anomalyTradeIds": [],
-            "error": run_err,
+            "error": (
+                "I couldn't generate a valid database query for that request. "
+                "Please try rephrasing it with a specific metric, date, trader, sector, or security."
+            ),
         }
 
     if not rows:
@@ -308,77 +1179,8 @@ def text_to_sql_and_run(question: str, context: dict[str, Any] | None = None) ->
     second = _claude_second_pass(question, rows, columns, user_asked_for_graph=user_asked_for_graph)
 
     chart_option = second.get("echarts_option") if user_asked_for_graph else None
-    if not chart_option and user_asked_for_graph:
-        chart_type = suggest_chart_type(question, columns, len(rows))
-        if chart_type and rows:
-            cat_col = next((c for c in columns if c in ["product", "counterparty_name", "trader_name", "side", "trade_date"] and rows[0].get(c) is not None), columns[0] if columns else None)
-            num_col = next((c for c in columns if c not in [cat_col] and isinstance(rows[0].get(c), (int, float))), None)
-            date_col = next((c for c in columns if "date" in c.lower()), None)
-            _palette = ["#2E75B6", "#5B9BD5", "#8FAADC", "#BDD7EE", "#4472C4", "#9DC3E6", "#7C8A96", "#A6A6A6", "#6B8CAE", "#BFBFBF"]
-            _grid = {"top": 40, "right": 30, "bottom": 50, "left": 60, "containLabel": True}
-            _tooltip = {"backgroundColor": "#2d2d2d", "borderColor": "#3d3d3d", "textStyle": {"color": "#e0e0e0", "fontSize": 12}}
-            _axis_style = {"axisLine": {"lineStyle": {"color": "#3d3d3d"}}, "axisTick": {"show": False}, "axisLabel": {"color": "#a0a0a0", "fontSize": 11}}
-            _title = {"text": question[:60], "left": "center", "textStyle": {"color": "#e0e0e0", "fontSize": 14}}
-            if chart_type == "bar" and cat_col is not None and num_col is not None:
-                chart_option = {
-                    "backgroundColor": "transparent",
-                    "title": _title,
-                    "grid": _grid,
-                    "tooltip": _tooltip,
-                    "xAxis": {"type": "category", "data": [str(r.get(cat_col, "")) for r in rows[:20]], **_axis_style},
-                    "yAxis": {"type": "value", "splitLine": {"lineStyle": {"color": "#2d2d2d", "type": "dashed"}}, **_axis_style},
-                    "series": [{"type": "bar", "data": [r.get(num_col) for r in rows[:20]], "itemStyle": {"color": "#5B9BD5"}, "emphasis": {"itemStyle": {"borderColor": "#fff", "borderWidth": 1}}}],
-                }
-            elif chart_type == "line" and date_col and num_col:
-                chart_option = {
-                    "backgroundColor": "transparent",
-                    "title": _title,
-                    "grid": _grid,
-                    "tooltip": _tooltip,
-                    "xAxis": {"type": "category", "data": [str(r.get(date_col, "")) for r in rows[:31]], **_axis_style},
-                    "yAxis": {"type": "value", "splitLine": {"lineStyle": {"color": "#2d2d2d", "type": "dashed"}}, **_axis_style},
-                    "series": [{"type": "line", "data": [r.get(num_col) for r in rows[:31]], "smooth": True, "symbol": "circle", "symbolSize": 6, "lineStyle": {"width": 2, "color": "#5B9BD5"}, "itemStyle": {"color": "#5B9BD5"}, "emphasis": {"focus": "series", "itemStyle": {"borderColor": "#fff", "borderWidth": 2}}}],
-                }
-            elif chart_type in ("pie", "doughnut") and cat_col is not None and num_col is not None:
-                series_cfg: dict = {
-                    "type": "pie",
-                    "data": [{"name": str(r.get(cat_col, "")), "value": r.get(num_col)} for r in rows[:15]],
-                    "color": _palette,
-                    "itemStyle": {"borderRadius": 4, "borderColor": "#1e1e1e", "borderWidth": 2},
-                    "label": {"color": "#a0a0a0", "fontSize": 10},
-                    "labelLine": {"lineStyle": {"color": "#3d3d3d"}},
-                    "emphasis": {"itemStyle": {"shadowBlur": 10, "shadowColor": "rgba(0,0,0,0.5)"}},
-                }
-                if chart_type == "doughnut":
-                    series_cfg["radius"] = ["45%", "75%"]
-                chart_option = {
-                    "backgroundColor": "transparent",
-                    "title": _title,
-                    "tooltip": _tooltip,
-                    "series": [series_cfg],
-                }
-            elif chart_type == "area" and date_col and num_col:
-                chart_option = {
-                    "backgroundColor": "transparent",
-                    "title": _title,
-                    "grid": _grid,
-                    "tooltip": _tooltip,
-                    "xAxis": {"type": "category", "data": [str(r.get(date_col, "")) for r in rows[:31]], **_axis_style},
-                    "yAxis": {"type": "value", "splitLine": {"lineStyle": {"color": "#2d2d2d", "type": "dashed"}}, **_axis_style},
-                    "series": [{"type": "line", "areaStyle": {"color": "rgba(91,155,213,0.35)"}, "data": [r.get(num_col) for r in rows[:31]], "smooth": True, "symbol": "circle", "symbolSize": 4, "lineStyle": {"width": 2, "color": "#5B9BD5"}, "itemStyle": {"color": "#5B9BD5"}, "emphasis": {"focus": "series"}}],
-                }
-            elif chart_type == "scatter" and num_col and len(columns) >= 2:
-                xcol = columns[0] if columns[0] != num_col else (columns[1] if len(columns) > 1 else None)
-                if xcol and isinstance(rows[0].get(xcol), (int, float)):
-                    chart_option = {
-                        "backgroundColor": "transparent",
-                        "title": _title,
-                        "grid": _grid,
-                        "tooltip": _tooltip,
-                        "xAxis": {"type": "value", "splitLine": {"lineStyle": {"color": "#2d2d2d", "type": "dashed"}}, **_axis_style},
-                        "yAxis": {"type": "value", "splitLine": {"lineStyle": {"color": "#2d2d2d", "type": "dashed"}}, **_axis_style},
-                        "series": [{"type": "scatter", "data": [[r.get(xcol), r.get(num_col)] for r in rows[:100]], "symbolSize": 8, "itemStyle": {"color": "#5B9BD5"}, "emphasis": {"scale": 2, "itemStyle": {"borderColor": "#fff", "borderWidth": 1}}}],
-                    }
+    if user_asked_for_graph:
+        chart_option = _finalize_chart_option(chart_option, rows, columns, question)
 
     summary = second.get("summary", "")
     if not chart_option and summary:
@@ -426,49 +1228,50 @@ REQUIRED styling (trading-terminal dark theme):
         prompt += f"\n\nUser requested: {chart_type_hint} chart."
     text, err = _bedrock_chat([{"role": "user", "content": prompt}], system=system)
     if err or not text:
-        return None
+        return _build_chart_option(rows, columns, "Generated from query results", chart_type_hint or "bar")
     try:
         text_clean = text.strip()
         if text_clean.startswith("```"):
             text_clean = re.sub(r"^```\w*\n?", "", text_clean)
             text_clean = re.sub(r"\n?```\s*$", "", text_clean)
         out = json.loads(text_clean)
-        return out.get("echarts_option")
+        return out.get("echarts_option") or _build_chart_option(rows, columns, "Generated from query results", chart_type_hint or "bar")
     except json.JSONDecodeError:
-        return None
+        return _build_chart_option(rows, columns, "Generated from query results", chart_type_hint or "bar")
 
 
 def _extract_chart_type_preference(message: str) -> str | None:
     """Extract user's chart type preference from message. Returns pie, bar, line, area, scatter, doughnut, or None."""
-    m = message.lower()
-    if "pie chart" in m or "piechart" in m or " pie " in m:
-        return "pie"
-    if "bar chart" in m or "barchart" in m or " bar " in m and "chart" in m:
-        return "bar"
-    if "line chart" in m or "linechart" in m or " line " in m and "chart" in m:
+    m = f" {message.lower().strip()} "
+
+    if re.search(r"\b(not\s+a?\s*)?doughnut\b|\bdonut\b", m):
+        return "doughnut" if "not doughnut" not in m and "not donut" not in m else "bar"
+    if re.search(r"\bscatter(?:\s+plot|\s+chart|\s+graph)?\b", m):
+        return "scatter" if "not scatter" not in m else "bar"
+    if re.search(r"\barea(?:\s+chart|\s+graph)?\b", m):
+        return "area" if "not area" not in m else "bar"
+    if re.search(r"\bline(?:\s+chart|\s+graph)?\b", m):
+        if "not a line" in m or "not line" in m:
+            if "pie" in m:
+                return "pie"
+            if "bar" in m:
+                return "bar"
+            return "bar"
         return "line"
-    if "area chart" in m or "areachart" in m:
-        return "area"
-    if "scatter" in m:
-        return "scatter"
-    if "doughnut" in m or "donut" in m:
-        return "doughnut"
-    if "not a bar" in m or "not bar" in m:
-        if "pie" in m:
+    if re.search(r"\bbar(?:\s+chart|\s+graph)?\b", m):
+        if "not a bar" in m or "not bar" in m:
+            if "pie" in m:
+                return "pie"
+            if "line" in m:
+                return "line"
             return "pie"
-        if "line" in m:
-            return "line"
+        return "bar"
+    if re.search(r"\bpie(?:\s+chart|\s+graph)?\b", m):
+        if "not a pie" in m or "not pie" in m:
+            if "bar" in m:
+                return "bar"
+            return "bar"
         return "pie"
-    if "not a pie" in m or "not pie" in m:
-        if "bar" in m:
-            return "bar"
-        return "bar"
-    if "not a line" in m or "not line" in m:
-        if "pie" in m:
-            return "pie"
-        if "bar" in m:
-            return "bar"
-        return "bar"
     return None
 
 
@@ -491,15 +1294,74 @@ def _user_wants_graph_from_chat(message: str) -> bool:
     )
 
 
+def _should_attach_visuals_for_chat(question: str) -> bool:
+    q = (question or "").lower()
+    if _intent_supported(q):
+        return True
+    return any(
+        token in q
+        for token in [
+            "show",
+            "compare",
+            "summarize",
+            "summary",
+            "explain",
+            "which",
+            "what",
+            "largest",
+            "most",
+            "top",
+            "outlier",
+            "unusual",
+            "activity",
+        ]
+    )
+
+
+def _clean_chat_visual_summary(summary: str | None) -> str:
+    text = (summary or "").strip()
+    if not text:
+        return ""
+    return re.sub(
+        r"\n*\s*Would you like me to create a graph from this data\?\s*$",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    ).strip()
+
+
 def rag_chat(
     question: str,
     history: list[dict[str, str]] | None = None,
     context_snapshot: dict | None = None,
+    response_style: str | None = "detailed",
 ) -> tuple[str, dict | None, list | None, str | None]:
     """Mode 2: RAG chat via Bedrock.
     If context_snapshot is provided (from last Data Query), prepend it so the LLM can analyze that data.
     Returns (answer, chart_option). chart_option is set when user says 'yes' to graph or asks for one."""
-    system = "You are a fixed income trading analyst. Answer based on the database schema: tables trades, securities, counterparties, traders, desks; views v_trades_full, v_daily_summary, v_counterparty_activity, v_trader_performance. Be concise."
+    unsupported_message = _unsupported_metric_message(question)
+    if unsupported_message:
+        return unsupported_message, None, None, None
+
+    style = (response_style or "detailed").lower()
+    style_instruction = (
+        "Use the heading 'Short Explanation' followed by a concise answer. "
+        "Then use the heading 'Feedback' and place the practical recommendation there at the end."
+        if style == "short"
+        else "Use the heading 'Detailed Explanation' followed by a fuller explanation. "
+        "Then use the heading 'Feedback' and place the practical recommendation there at the end."
+    )
+    system = (
+        "You are a fixed income trading analyst. Answer based on the database schema: "
+        "tables trades, securities, counterparties, traders, desks; views v_trades_full, "
+        "v_daily_summary, v_counterparty_activity, v_trader_performance. "
+        f"The latest available trade_date in this sample data is {_latest_trade_date()}, so interpret "
+        "\"today\" as that date and \"yesterday\" as one day earlier. "
+        "Explain insights clearly, do not include SQL in your answer, and if the user asks for unsupported "
+        "metrics like P&L, win rate, VWAP, benchmark prices, or slippage, say the dataset does not contain those fields. "
+        "Do not use markdown asterisks around titles. "
+        f"{style_instruction}"
+    )
     user_content = question
     if context_snapshot and context_snapshot.get("data"):
         data = context_snapshot.get("data", [])
@@ -543,11 +1405,26 @@ def rag_chat(
                 chart_option = result.get("chartOption")
                 extra_data = result.get("data", [])
                 extra_sql = result.get("sql")
-                answer = (result.get("aiSummary") or "").rstrip()
+                answer = _clean_chat_visual_summary(result.get("aiSummary"))
                 if not answer:
-                    answer = f"Here are the results. Returned {len(extra_data)} row(s)."
+                    answer = f"Here are the results. Total Trades: {len(extra_data)}."
                 if chart_option:
                     answer += "\n\nI've created a graph. It should appear in the AI Graph panel."
-                if extra_sql:
-                    answer += f"\n\n```sql\n{extra_sql}\n```"
+    elif not context_snapshot and _should_attach_visuals_for_chat(question):
+        result = text_to_sql_and_run(question, None)
+        if not result.get("error") and result.get("data"):
+            extra_data = result.get("data", [])
+            extra_sql = result.get("sql")
+            columns = list(extra_data[0].keys()) if extra_data else []
+            chart_option = result.get("chartOption") or _finalize_chart_option(
+                None,
+                extra_data,
+                columns,
+                question,
+            )
+            visual_summary = _clean_chat_visual_summary(result.get("aiSummary"))
+            if visual_summary and visual_summary.lower() not in answer.lower():
+                answer = answer.rstrip() + "\n\n" + visual_summary
+            if chart_option and "ai graph panel" not in answer.lower():
+                answer = answer.rstrip() + "\n\nI've added a supporting graph and table for this question."
     return (answer, chart_option, extra_data, extra_sql)
