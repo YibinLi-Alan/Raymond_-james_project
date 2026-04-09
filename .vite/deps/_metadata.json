@@ -1,0 +1,76 @@
+{
+  "hash": "33d66c52",
+  "configHash": "16624947",
+  "lockfileHash": "aafded17",
+  "browserHash": "405a99b8",
+  "optimized": {
+    "react/jsx-dev-runtime": {
+      "src": "../../node_modules/react/jsx-dev-runtime.js",
+      "file": "react_jsx-dev-runtime.js",
+      "fileHash": "05c79e6e",
+      "needsInterop": true
+    },
+    "react-dom/client": {
+      "src": "../../node_modules/react-dom/client.js",
+      "file": "react-dom_client.js",
+      "fileHash": "bb741d19",
+      "needsInterop": true
+    },
+    "react": {
+      "src": "../../node_modules/react/index.js",
+      "file": "react.js",
+      "fileHash": "25456cb7",
+      "needsInterop": true
+    },
+    "xlsx": {
+      "src": "../../node_modules/xlsx/xlsx.mjs",
+      "file": "xlsx.js",
+      "fileHash": "335481e7",
+      "needsInterop": false
+    },
+    "zustand": {
+      "src": "../../node_modules/zustand/esm/index.mjs",
+      "file": "zustand.js",
+      "fileHash": "9f846b16",
+      "needsInterop": false
+    },
+    "zustand/middleware": {
+      "src": "../../node_modules/zustand/esm/middleware.mjs",
+      "file": "zustand_middleware.js",
+      "fileHash": "dafda937",
+      "needsInterop": false
+    },
+    "ag-grid-react": {
+      "src": "../../node_modules/ag-grid-react/dist/package/index.esm.mjs",
+      "file": "ag-grid-react.js",
+      "fileHash": "4860ec40",
+      "needsInterop": false
+    },
+    "echarts-for-react": {
+      "src": "../../node_modules/echarts-for-react/esm/index.js",
+      "file": "echarts-for-react.js",
+      "fileHash": "f8bb6a54",
+      "needsInterop": false
+    },
+    "echarts": {
+      "src": "../../node_modules/echarts/index.js",
+      "file": "echarts.js",
+      "fileHash": "89cefb4f",
+      "needsInterop": false
+    }
+  },
+  "chunks": {
+    "chunk-ERLRPAAT": {
+      "file": "chunk-ERLRPAAT.js"
+    },
+    "chunk-PUZDRPJL": {
+      "file": "chunk-PUZDRPJL.js"
+    },
+    "chunk-PAMVEWRW": {
+      "file": "chunk-PAMVEWRW.js"
+    },
+    "chunk-G3PMV62Z": {
+      "file": "chunk-G3PMV62Z.js"
+    }
+  }
+}
