@@ -1,4 +1,4 @@
-# SQLite database for Morning Blotter
+:# SQLite database for Morning Blotter
 
 This folder holds the **SQLite** trade database used by the optional FastAPI backend and ready for **Vanna** (text-to-SQL).
 
