@@ -1183,11 +1183,15 @@ Private - All rights reserved
 
 ## Contact And Ownership
 
-Primary contact person: update this section with the designated project owner before external handoff.
+Project Owners & Repository Stewards (NDA & Compliance):
 
-Recommended fields to fill in before submission:
+- Kanishka Gupta - Kanishk2@tepper.cmu.edu
+- Viharika Appaneravanda - Vappaner@tepper.cmu.edu
+- Stella Lu - Stellalu@tepper.cmu.edu
+- Yibin Li - Yibinli@tepper.cmu.edu
 
-- project owner name
-- team or organization
-- email address
-- repository steward for NDA/compliance questions
+Organization:
+
+Carnegie Mellon University - MS in Business Analytics (MSBA) Capstone Project - Tepper School of Business
+
+In association with Raymond James (Garrett Crawford)
