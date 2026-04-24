@@ -1185,13 +1185,13 @@ Private - All rights reserved
 
 Project Owners & Repository Stewards (NDA & Compliance):
 
-- Kanishka Gupta - Kanishk2@tepper.cmu.edu
-- Viharika Appaneravanda - Vappaner@tepper.cmu.edu
-- Stella Lu - Stellalu@tepper.cmu.edu
-- Yibin Li - Yibinli@tepper.cmu.edu
+- Kanishka Gupta - kanishk2@tepper.cmu.edu
+- Viharika Mandappa Appaneravanda - vappaner@tepper.cmu.edu
+- Stella Lu - stellalu@tepper.cmu.edu
+- Yibin Li - yibinli@tepper.cmu.edu
 
 Organization:
 
 Carnegie Mellon University - MS in Business Analytics (MSBA) Capstone Project - Tepper School of Business
 
-In association with Raymond James (Garrett Crawford)
+In association with Raymond James: Garrett Crawford - garrett.crawford@raymondjames.com 
